@@ -15,6 +15,8 @@ const isMobile = isIOS || isAndroid;
 const CATS = [['이동', '🚗'], ['숙소', '🏨'], ['식사', '🍽️'], ['갈곳', '📍'], ['체험', '🎡'], ['쇼핑', '🛍️'], ['기타', '📝']];
 const ICON = Object.fromEntries(CATS);
 const iconOf = c => ICON[c] || '📌'; // 예전에 쓰던 다른 분류도 그대로 표시
+const CCOL = { 이동: '#4C7BD9', 숙소: '#7C5CDB', 식사: '#E8742E', 갈곳: '#2F9E6E', 체험: '#D69E00', 쇼핑: '#D6336C', 기타: '#868E96' };
+const won = n => '₩' + Math.round(+n || 0).toLocaleString('ko-KR');
 const COLORS = { ocean: '#C4DDF0', sunset: '#F8CDB8', forest: '#C7E2CC', lavender: '#D6CCEF', rose: '#F1C8D2', sand: '#E9DBB8', night: '#1D2433' };
 const EMOJIS = ['✈️', '🏖️', '⛰️', '🚗', '🏯', '🌸', '🍜', '📚', '♨️', '🎡', '🌊', '🏕️', '🍁', '❄️'];
 const PACK_SUG = ['신분증', '충전기', '보조배터리', '상비약', '세면도구', '선크림', '우산', '잠옷', '책', '여권', '유심 / eSIM', '카메라', '차 키'];
@@ -42,7 +44,7 @@ const S = {
   user: null, trips: [], items: [],
   tripId: null, tab: 'all', day: 0,
   home: 'up', theme: '', q: '',
-  lastPull: 0, pulling: false, sheetUrl: ''
+  lastPull: 0, pulling: false, sheetUrl: '', costView: 'cat'
 };
 
 const LS = {
@@ -127,7 +129,7 @@ const tripRow = t => ({
 const itemRow = x => ({
   id: x.id, tripId: x.trip_id, date: x.date, endDate: x.end_date, time: x.time, endTime: x.end_time, category: x.category,
   title: x.title, place: x.place, cost: x.cost, link: x.link, memo: x.memo, order: String(x.ord), route: x.route,
-  images: x.photos.map(p => p.id).filter(Boolean).join(','), createdAt: x.created_at || nowISO()
+  images: x.photos.map(p => p.id).filter(Boolean).join(','), createdAt: x.created_at
 });
 
 /* 변경 대기열 — 화면은 바로 바뀌고, 시트 저장은 뒤에서 한 번에 모아서 보냄 (오프라인이면 연결될 때) */
@@ -236,8 +238,19 @@ function km(a, b) {
 /* ───────── 여행·일정 계산 ───────── */
 const tripOf = id => S.trips.find(t => t.id === id);
 const itemsOf = id => S.items.filter(x => x.trip_id === id);
-const byOrd = (a, b) => (a.ord - b.ord) || a.created_at.localeCompare(b.created_at);
+const byOrd = (a, b) => (a.ord - b.ord) || String(a.created_at).localeCompare(String(b.created_at));
+/* 하루 일정 정렬: 시간 있는 일정은 시간순, 시간 없는 일정은 바로 앞 일정에 붙어서 따라감
+   예) 11:00 픽업 → (시간 없음) 링엄사 → 09:30 조식  ⇒  09:30 조식, 11:00 픽업, 링엄사 */
+function sortDay(list) {
+  const a = list.slice().sort(byOrd);
+  let last = '';
+  const eff = a.map(x => (last = x.time || last));
+  return a.map((x, i) => [x, eff[i], i]).sort((p, q) => (p[1] < q[1] ? -1 : p[1] > q[1] ? 1 : p[2] - q[2])).map(p => p[0]);
+}
+/* 하루 순서를 화면 순서 그대로 1, 2, 3… 으로 다시 매김 (바뀐 일정만 저장) */
+function renumber(list) { list.forEach((x, i) => { if (x.ord !== i + 1) { x.ord = i + 1; putItem(x); } }); }
 const tagsOf = t => String(t.tags || '').split(',').map(s => s.trim()).filter(Boolean);
+const allTags = () => [...new Set(S.trips.flatMap(tagsOf))].sort();
 
 function tripDays(t) {
   if (validYmd(t.start_date)) {
@@ -277,7 +290,9 @@ const sleepsOn = (x, d) => x.category === '숙소' && validYmd(x.date) && x.date
 /* 이동 일정에 도착지가 비어 있으면 그다음 일정의 장소로 자동 연결 */
 function orderedItems(t) {
   const days = tripDays(t), rank = d => { const i = days.indexOf(d); return i < 0 ? 9999 : i; };
-  return itemsOf(t.id).slice().sort((a, b) => (rank(a.date) - rank(b.date)) || byOrd(a, b));
+  const by = {};
+  itemsOf(t.id).forEach(x => (by[x.date] = by[x.date] || []).push(x));
+  return Object.keys(by).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b)).flatMap(d => sortDay(by[d]));
 }
 function nextPlaceItem(x) {
   const t = tripOf(x.trip_id); if (!t) return null;
@@ -285,10 +300,6 @@ function nextPlaceItem(x) {
   return list.slice(i + 1).find(v => v.place && v.category !== '이동') || list.slice(i + 1).find(v => v.place) || null;
 }
 
-const money = v => {
-  const n = String(v || '').replace(/[^\d.-]/g, '');
-  return n && !isNaN(+n) && /\d/.test(v) && /^[\s₩원,\d.-]+$/.test(String(v)) ? '₩' + (+n).toLocaleString('ko-KR') : String(v || '');
-};
 const costNum = v => { const s = String(v || ''); return /^[\s₩원,\d.-]+$/.test(s) ? +(s.replace(/[^\d.-]/g, '')) || 0 : 0; };
 
 /* ───────── 지도 링크 ───────── */
@@ -426,39 +437,50 @@ function homeView() {
       <button class="ibtn" onclick="A.settings()" aria-label="설정">⚙️</button>
       <button class="ibtn dark" onclick="A.editTrip()" aria-label="새 여행">＋</button></div>
     <div class="sync" id="sync"></div>
+    ${homeStats()}
     <div class="seg">${tabs.map(([k, l]) => `<button class="${S.home === k ? 'on' : ''}" onclick="A.home('${k}')">${l}</button>`).join('')}</div>
     <input class="search" id="q" placeholder="🔍 여행·장소·메모 검색" value="${esc(S.q)}" oninput="A.search(this.value)">
     <div id="list">${body}</div></div>`;
 }
+function homeStats() {
+  const ts = S.trips, y = today().slice(0, 4);
+  const days = ts.filter(t => validYmd(t.start_date) && t.start_date <= today()).reduce((a, t) => a + tripDays(t).filter(d => d <= today()).length, 0);
+  return `<div class="hstats home"><div><b>${ts.length}</b><span>전체 여행</span></div><div><b>${days}일</b><span>여행한 날</span></div>
+    <div><b>${allTags().length}</b><span>테마 · 지역</span></div><div><b>${ts.filter(t => (t.start_date || '').startsWith(y)).length}</b><span>${y}년 여행</span></div></div>`;
+}
 const emptyView = m => `<div class="empty"><div class="big">🗺️</div><p>${m}</p></div>`;
 
 function tripView(t) {
-  const days = tripDays(t);
-  if (S.day >= days.length) S.day = 0;
-  const tabs = [['all', '전체'], ['day', '일차별'], ['log', '기록']];
-  let body = '';
-  if (S.tab === 'all') {
-    body = days.map((d, i) => dayBlock(t, d, i, days.length)).join('');
-    const loose = itemsOf(t.id).filter(x => !days.includes(x.date)).sort(byOrd);
-    if (loose.length) body += `<div class="day"><div class="day-h"><b>날짜 미정 · 기간 밖</b></div>${loose.map(x => itemCard(x)).join('')}</div>`;
-    if (!days.length && !loose.length) body = emptyView('아래 ＋ 버튼으로 일정을 추가해보세요');
-  } else if (S.tab === 'day') {
-    body = days.length ? `<div class="chips">${days.map((d, i) => `<button class="chip ${S.day === i ? 'on' : ''}" onclick="A.day(${i})">${i + 1}일차 · ${md(d)}</button>`).join('')}</div>`
-      + dayBlock(t, days[S.day], S.day, days.length) : emptyView('여행 날짜를 먼저 정해주세요');
-  } else body = logView(t);
+  const days = tripDays(t), its = itemsOf(t.id);
+  const undated = its.filter(x => !days.includes(x.date));
+  const tabs = [['all', '전체', '']].concat(days.map((d, i) => [d, `${i + 1}일차`, md(d)]));
+  if (undated.length) tabs.push(['none', '날짜 미정', '']);
+  tabs.push(['log', '📝 기록', '']);
+  if (!tabs.some(x => x[0] === S.tab)) S.tab = 'all';
+  const total = its.reduce((s, x) => s + costNum(x.cost), 0);
+  let body;
+  if (S.tab === 'log') body = logView(t);
+  else if (S.tab === 'none') body = dayBlock(t, '', -1, days.length);
+  else if (S.tab !== 'all') body = dayBlock(t, S.tab, days.indexOf(S.tab), days.length);
+  else body = days.map((d, i) => dayBlock(t, d, i, days.length)).join('') + (undated.length || !days.length ? dayBlock(t, '', -1, days.length) : '');
+  const st = ddayOf(t) || (isPast(t) ? '다녀옴' : '');
 
   return `<div class="wrap">
     <button class="back" onclick="A.home()">‹ 여행 목록</button>
     <div class="sync" id="sync" style="margin-top:-30px"></div>
     <div class="hero c-${t.color}">
       <div class="em">${esc(t.emoji)}</div><h2>${esc(t.title || '제목 없는 여행')}</h2>
-      <div class="dt">${esc(dateLabel(t))}${ddayOf(t) ? ' · <b>' + ddayOf(t) + '</b>' : ''}</div>
-      <div style="margin-top:6px">${tagsOf(t).map(g => `<span class="tag">#${esc(g)}</span>`).join('')}</div>
+      <div class="dt">${esc(dateLabel(t))}</div>
+      <div style="margin-top:6px">${st ? `<span class="tag st">${st}</span>` : ''}${tagsOf(t).map(g => `<span class="tag">#${esc(g)}</span>`).join('')}</div>
       ${t.memo ? `<div class="memo">${esc(t.memo)}</div>` : ''}
+      <div class="hstats"><div><b>${its.length}</b><span>전체 일정</span></div>
+        <div><b>${its.filter(x => x.category === '갈곳' || x.category === '체험').length}</b><span>갈 곳 · 체험</span></div>
+        <div><b>${total ? won(total) : '-'}</b><span>경비</span></div></div>
       <div class="acts"><button onclick="A.editTrip('${t.id}')">✏️ 편집</button><button onclick="A.dupTrip('${t.id}')">📑 복제</button>
         <button onclick="A.print('${t.id}')">🖨 출력</button><button onclick="A.delTrip('${t.id}')">🗑 삭제</button></div>
     </div>
-    <div class="seg">${tabs.map(([k, l]) => `<button class="${S.tab === k ? 'on' : ''}" onclick="A.tab('${k}')">${l}</button>`).join('')}</div>
+    <nav class="daytabs" id="daytabs">${tabs.map(([k, l, sub]) =>
+      `<button class="${S.tab === k ? 'on' : ''}" onclick="A.tab('${k}')">${l}${sub ? `<small>${sub}</small>` : ''}</button>`).join('')}</nav>
     ${body}
     ${packingView(t)}
   </div>
@@ -466,38 +488,39 @@ function tripView(t) {
 }
 
 function dayBlock(t, d, i, total) {
-  const its = itemsOf(t.id);
-  const outs = its.filter(x => x.category === '숙소' && validYmd(x.date) && x.date < d && checkoutOf(x) === d);
-  const main = its.filter(x => x.date === d).sort(byOrd);
-  const mids = its.filter(x => x.category === '숙소' && validYmd(x.date) && x.date < d && d < checkoutOf(x));
-  const tonight = its.find(x => sleepsOn(x, d));
-  const stay = tonight ? `🏨 오늘 밤 · ${esc(tonight.title || tonight.place)}` : i === total - 1 && total > 1 ? '🏠 돌아오는 날' : '🏨 숙소 미정';
+  const its = itemsOf(t.id), days = tripDays(t);
+  const main = sortDay(d ? its.filter(x => x.date === d) : its.filter(x => !days.includes(x.date)));
+  const outs = d ? its.filter(x => x.category === '숙소' && validYmd(x.date) && x.date < d && checkoutOf(x) === d) : [];
+  const mids = d ? its.filter(x => x.category === '숙소' && validYmd(x.date) && x.date < d && d < checkoutOf(x)) : [];
+  const tonight = d ? its.find(x => sleepsOn(x, d)) : null;
+  const cnt = k => main.filter(x => x.category === k).length;
+  const stay = !d ? '' : tonight ? esc(tonight.title || tonight.place) : i === total - 1 && total > 1 ? '돌아오는 날' : '숙소 미정';
   const cost = main.reduce((s, x) => s + costNum(x.cost), 0);
-  return `<div class="day">
-    <div class="day-h"><b>${i + 1}일차</b><span>${md(d)}</span>${cost ? `<span>· ₩${cost.toLocaleString('ko-KR')}</span>` : ''}
-      <button class="add" onclick="A.newItem('${d}')">＋ 추가</button></div>
-    <div class="stay">${stay}</div>
-    ${outs.map(x => itemCard(x, 'out')).join('')}
-    ${main.map(x => itemCard(x)).join('')}
-    ${mids.map(x => itemCard(x, 'mid', d)).join('')}
-    ${!outs.length && !main.length && !mids.length ? `<div class="it ghost" onclick="A.newItem('${d}')"><div class="bd"><div class="tt">아직 일정이 없어요 · 눌러서 추가</div></div></div>` : ''}
-  </div>`;
+  return `<section class="day">
+    <div class="day-h"><span class="dnum">${i >= 0 ? 'DAY ' + (i + 1) : '날짜 미정'}</span><b>${d ? md(d) : '날짜 미정 · 기간 밖 일정'}</b>
+      ${cost ? `<span class="dcost">${won(cost)}</span>` : ''}</div>
+    ${d ? `<div class="day-sum"><span>🏨 ${stay}</span><span>🍽️ 식사 ${cnt('식사')}</span><span>📍 갈곳 ${cnt('갈곳') + cnt('체험')}</span></div>` : ''}
+    <div class="tl">
+      ${outs.map(x => itemCard(x, 'out')).join('')}
+      ${main.map(x => itemCard(x)).join('')}
+      ${mids.map(x => itemCard(x, 'mid', d)).join('')}
+      ${!outs.length && !main.length && !mids.length ? '<div class="tl-empty">아직 일정이 없어요. 아래에서 바로 추가해보세요.</div>' : ''}
+    </div>
+    <div class="quick">${CATS.map(([c, ic]) => `<button style="--c:${CCOL[c]}" onclick="A.newItem('${d}','${c}')">＋ ${ic} ${c}</button>`).join('')}</div>
+  </section>`;
 }
 
 function itemCard(x, mode, d) {
-  if (mode === 'out') {
-    return `<div class="it ghost" onclick="A.editItem('${x.id}')"><div class="ic k-숙소">🧳</div><div class="bd">
-      <div class="tm">체크아웃${x.end_time ? ' ' + esc(x.end_time) : ''}</div><div class="tt">${esc(x.title || x.place)}</div></div></div>`;
-  }
-  if (mode === 'mid') {
-    return `<div class="it ghost" onclick="A.editItem('${x.id}')"><div class="ic k-숙소">🌙</div><div class="bd">
-      <div class="tt">연박 · ${diffDays(x.date, d) + 1}박째</div><div class="sm">${esc(x.title || x.place)}</div></div></div>`;
+  const col = CCOL[x.category] || CCOL['기타'];
+  if (mode === 'out' || mode === 'mid') {
+    return `<div class="tl-item ghost" style="--c:${CCOL['숙소']}" onclick="A.editItem('${x.id}')">
+      <div class="tl-time">${mode === 'out' ? esc(x.end_time) : ''}</div><div class="tl-dot">${mode === 'out' ? '🧳' : '🌙'}</div>
+      <div class="tl-card"><div class="tl-top"><span class="tl-cat">${mode === 'out' ? '체크아웃' : `연박 · ${diffDays(x.date, d) + 1}박째`}</span></div>
+      <div class="tl-title">${esc(x.title || x.place)}</div></div></div>`;
   }
   const isMove = x.category === '이동';
-  let tm = x.time;
-  if (x.category === '숙소') tm = '체크인' + (x.time ? ' ' + x.time : '');
   let title = esc(x.title || x.place || '(이름 없음)');
-  let sub = [];
+  const sub = [];
   if (isMove) {
     const nx = x.place ? null : nextPlaceItem(x);
     const dest = x.place || (nx ? nx.place + ' (다음 일정)' : '');
@@ -506,17 +529,17 @@ function itemCard(x, mode, d) {
     if (from && to) sub.push(`직선 ${km(from, to).toFixed(1)}km`);
   }
   if (x.category === '숙소' && validYmd(x.date)) {
-    sub.push(`${md(x.date)} → ${md(checkoutOf(x))} · ${nightsOf(x)}박${x.end_time ? ' · 체크아웃 ' + esc(x.end_time) : ''}`);
+    sub.push(`${md(x.date)}${x.time ? ' ' + esc(x.time) : ''} → ${md(checkoutOf(x))}${x.end_time ? ' ' + esc(x.end_time) : ''} · ${nightsOf(x)}박`);
   }
   if (!isMove && x.place && x.title) sub.push('📍 ' + esc(x.place));
   const ph = x.photos || [];
   const thumbs = ph.length ? `<div class="thumbs">${ph.slice(0, 4).map((p, k) =>
     `<button onclick="event.stopPropagation();A.lightbox('${x.id}',${k})">${imgTag(p)}${k === 3 && ph.length > 4 ? `<span class="more">+${ph.length - 4}</span>` : ''}</button>`).join('')}</div>` : '';
-  return `<div class="it" onclick="A.editItem('${x.id}')">
-    <div class="ic k-${x.category}">${iconOf(x.category)}</div>
-    <div class="bd">
-      ${tm || x.cost ? `<div class="tm">${esc(tm)}${x.cost ? `<span class="cost" style="float:right">${esc(money(x.cost))}</span>` : ''}</div>` : ''}
-      <div class="tt">${title}</div>
+  return `<div class="tl-item" style="--c:${col}" onclick="A.editItem('${x.id}')">
+    <div class="tl-time">${esc(x.time)}</div><div class="tl-dot">${iconOf(x.category)}</div>
+    <div class="tl-card">
+      <div class="tl-top"><span class="tl-cat">${esc(x.category)}</span>${costNum(x.cost) ? `<span class="tl-cost">${won(costNum(x.cost))}</span>` : x.cost ? `<span class="tl-cost">${esc(x.cost)}</span>` : ''}</div>
+      <div class="tl-title">${title}</div>
       ${sub.length ? `<div class="sm">${sub.join(' · ')}</div>` : ''}
       ${x.memo ? `<div class="sm">${esc(x.memo)}</div>` : ''}
       ${linksOf(x)}${thumbs}
@@ -539,20 +562,45 @@ function packingView(t) {
 }
 
 function logView(t) {
-  const its = itemsOf(t.id);
-  const photos = orderedItems(t).flatMap(x => (x.photos || []).map((p, k) => ({ p, id: x.id, k })));
-  const total = its.reduce((s, x) => s + costNum(x.cost), 0);
-  const byCat = CATS.map(([c, ic]) => [c, ic, its.filter(x => x.category === c).length]).filter(c => c[2]);
-  return `<div class="box"><h4>⭐ 이번 여행은</h4>
+  const its = orderedItems(t), days = tripDays(t);
+  const photos = its.flatMap(x => (x.photos || []).map((p, k) => ({ p, id: x.id, k })));
+  const spent = its.filter(x => costNum(x.cost));
+  const by = {};
+  spent.forEach(x => { by[x.category] = (by[x.category] || 0) + costNum(x.cost); });
+  const total = Object.values(by).reduce((a, b) => a + b, 0), max = Math.max(1, ...Object.values(by));
+  const cats = Object.keys(by).sort((a, b) => by[b] - by[a]);
+  const when = x => { const i = days.indexOf(x.date); return x.date ? `${i >= 0 ? i + 1 + '일차 ' : ''}${md(x.date)}${x.time ? ' ' + x.time : ''}` : '날짜 미정'; };
+  const costBox = total ? `
+      <div class="seg mini">${[['cat', '분류별'], ['item', '항목별'], ['day', '일차별']].map(([k, l]) =>
+        `<button class="${S.costView === k ? 'on' : ''}" onclick="A.costView('${k}')">${l}</button>`).join('')}</div>
+      ${S.costView === 'item' ? `<div class="clist">${spent.map(x => `<div class="crow" onclick="A.editItem('${x.id}')">
+          <span class="cdot" style="background:${CCOL[x.category] || CCOL['기타']}"></span>
+          <div><b>${esc(x.category === '이동' ? (x.title + (x.place ? ' → ' + x.place : '')) : (x.title || x.place))}</b><small>${esc(when(x))} · ${esc(x.category)}</small></div>
+          <span class="camt">${won(costNum(x.cost))}</span></div>`).join('')}</div>`
+      : S.costView === 'day' ? `<div class="clist">${days.concat(spent.some(x => !days.includes(x.date)) ? [''] : []).map((d, i) => {
+          const list = spent.filter(x => d ? x.date === d : !days.includes(x.date));
+          if (!list.length) return '';
+          return `<div class="cday"><div class="cday-h"><span>${d ? `${i + 1}일차 · ${md(d)}` : '날짜 미정'}</span><b>${won(list.reduce((s, x) => s + costNum(x.cost), 0))}</b></div>
+            ${list.map(x => `<div class="crow" onclick="A.editItem('${x.id}')"><span class="cdot" style="background:${CCOL[x.category] || CCOL['기타']}"></span>
+              <div><b>${esc(x.title || x.place)}</b><small>${esc(x.category)}${x.time ? ' · ' + esc(x.time) : ''}</small></div><span class="camt">${won(costNum(x.cost))}</span></div>`).join('')}</div>`;
+        }).join('')}</div>`
+      : cats.map(c => `<details class="cbar" style="--c:${CCOL[c] || CCOL['기타']}"><summary>
+          <span class="cl">${iconOf(c)} ${esc(c)}</span><span class="bar2"><i style="width:${by[c] / max * 100}%"></i></span><span class="camt">${won(by[c])}</span></summary>
+          ${spent.filter(x => x.category === c).map(x => `<div class="crow" onclick="A.editItem('${x.id}')"><div><b>${esc(x.title || x.place)}</b><small>${esc(when(x))}</small></div><span class="camt">${won(costNum(x.cost))}</span></div>`).join('')}
+        </details>`).join('')}
+      <div class="ctotal"><span>합계</span><b>${won(total)}</b></div>`
+    : '<div class="sm">비용이 입력된 일정이 없어요. 일정을 눌러 비용을 넣으면 자동으로 정리돼요.</div>';
+  return `<div class="box"><h4>⭐ 여행 별점</h4>
       <div class="stars">${[1, 2, 3, 4, 5].map(n => `<button class="${t.rating >= n ? 'on' : ''}" onclick="A.rate(${n})">★</button>`).join('')}</div>
-      <label class="f">후기</label>
-      <textarea class="in" id="rv" rows="5" placeholder="좋았던 곳, 다음엔 바꿀 점…" oninput="A.review(this.value)">${esc(t.review)}</textarea></div>
-    <div class="box"><h4>📊 요약</h4>
-      <div class="sm" style="font-size:14px;line-height:1.9">${byCat.map(c => `${c[1]} ${c[0]} ${c[2]}`).join(' · ') || '일정 없음'}<br>
-      ${total ? `💰 기록된 비용 합계 <b>₩${total.toLocaleString('ko-KR')}</b>` : ''}</div></div>
+      <label class="f">여행 후기</label>
+      <textarea class="in" id="rv" rows="6" placeholder="좋았던 곳, 다음엔 바꾸고 싶은 것, 기억하고 싶은 순간…" oninput="A.review(this.value)">${esc(t.review)}</textarea>
+      <div class="hint">입력하면 자동으로 저장돼요</div></div>
+    <div class="box"><h4>💰 경비 정리 ${total ? `<small>${spent.length}건</small>` : ''}</h4>${costBox}</div>
+    ${t.memo ? `<div class="box"><h4>📝 여행 메모</h4><div class="sm" style="font-size:14px">${esc(t.memo)}</div></div>` : ''}
     <div class="box"><h4>📷 사진 <small>${photos.length}장</small></h4>
       ${photos.length ? `<div class="gallery">${photos.map(o => `<button onclick="A.lightbox('${o.id}',${o.k})">${imgTag(o.p)}</button>`).join('')}</div>`
-      : '<div class="sm">일정에 사진을 붙이면 여기에 모여요</div>'}</div>`;
+      : '<div class="sm">일정에 사진을 붙이면 여기에 모여요</div>'}</div>
+    <div style="text-align:center;margin:6px 0 18px"><button class="btn" style="flex:none;padding:12px 18px" onclick="A.dupTrip('${t.id}')">📋 이 여행 복제하기</button></div>`;
 }
 
 /* ───────── 시트(편집 창) ───────── */
@@ -593,6 +641,7 @@ function tripSheet(t) {
     <label class="f">색상</label><div class="row colors" style="gap:8px">${Object.entries(COLORS).map(([k, c]) =>
       `<button type="button" class="${t.color === k ? 'on' : ''}" style="flex:none;background:${c}" onclick="A.pickOne(this)" data-v="${k}"></button>`).join('')}</div>
     <label class="f">테마·지역 태그 (쉼표로 구분)</label><input class="in" id="t_tags" value="${esc(t.tags)}" placeholder="부산, 바다, 맛집">
+    ${allTags().length ? `<div class="sug">${allTags().map(g => `<button type="button" onclick="A.addTag('${esc(g).replace(/'/g, '&#39;')}')">#${esc(g)}</button>`).join('')}</div>` : ''}
     <div class="row"><div>${dateField('t_s', '출발일', t.start_date, 't_e')}</div><div>${dateField('t_e', '돌아오는 날', t.end_date)}</div></div>
     <div class="hint" id="t_h">${esc(lenLabel(t))}</div>
     <label class="f">메모</label><textarea class="in" id="t_memo" placeholder="예약 번호, 주의할 점…">${esc(t.memo)}</textarea>
@@ -616,7 +665,7 @@ function itemSheet() {
     coOpts = after.map(d => `<option value="${d}" ${co === d ? 'selected' : ''}>${md(d)} · ${diffDays(E.date, d)}박</option>`).join('');
   }
   const exists = !!S.items.find(x => x.id === E.id);
-  const sameDay = exists ? itemsOf(E.trip_id).filter(x => x.date === E.date).sort(byOrd) : [];
+  const sameDay = exists ? sortDay(itemsOf(E.trip_id).filter(x => x.date === E._orig.date)) : [];
   const pos = sameDay.findIndex(x => x.id === E.id);
   const geoTo = E.geo && E.geo.to;
   openSheet(`<h3>${exists ? '일정 편집' : '일정 추가'}</h3>
@@ -630,7 +679,7 @@ function itemSheet() {
     <label class="f">${isMove ? '도착지' : '장소 · 주소'}</label>
     <input class="in" id="i_place" value="${esc(E.place)}" placeholder="${isMove ? '비워두면 다음 일정 장소로 자동 연결' : '상호+지점이나 도로명 주소 (길찾기용)'}">
     <div class="hint">${E.place ? (geoTo ? '📍 좌표 저장됨 · 티맵·네이버 길찾기 연결' : '저장하면 좌표를 찾아 길찾기를 연결해요') : ''}</div>
-    <div class="row"><div><label class="f">비용</label><input class="in" id="i_cost" value="${esc(E.cost)}" inputmode="numeric" placeholder="35000"></div>
+    <div class="row"><div><label class="f">비용</label><input class="in" id="i_cost" value="${esc(costNum(E.cost) ? costNum(E.cost).toLocaleString('ko-KR') : E.cost)}" inputmode="numeric" placeholder="35,000" oninput="A.fmtNum(this)"></div>
       <div><label class="f">링크</label><input class="in" id="i_link" value="${esc(E.link)}" placeholder="예약·블로그 주소"></div></div>
     <label class="f">메모</label><textarea class="in" id="i_memo">${esc(E.memo)}</textarea>
     <label class="f">사진 · 캡처 ${isMobile ? '' : '<span style="font-weight:500">(Ctrl+V로 붙여넣기, 끌어다 놓기 가능)</span>'}</label>
@@ -652,7 +701,7 @@ function readItemForm() {
   if (!E || !$('#i_title')) return;
   E.date = $('#i_date').value; E.time = $('#i_time').value;
   E.title = $('#i_title').value.trim(); E.place = $('#i_place').value.trim();
-  E.cost = $('#i_cost').value.trim(); E.link = $('#i_link').value.trim(); E.memo = $('#i_memo').value.trim();
+  const cv = $('#i_cost').value.trim(); E.cost = /^[\d,\s₩원]+$/.test(cv) ? cv.replace(/\D/g, '') : cv; E.link = $('#i_link').value.trim(); E.memo = $('#i_memo').value.trim(); // 비용 숫자는 쉼표 없이 저장
   if ($('#i_end')) E.end_date = $('#i_end').value || ''; if ($('#i_etime')) E.end_time = $('#i_etime').value;
 }
 async function addPhotos(files) {
@@ -670,16 +719,18 @@ async function addPhotos(files) {
   }
 }
 
-/* 새 일정 순서: 시간이 있으면 같은 날 시간 순서 자리에, 없으면 맨 뒤 */
-function ordFor(x) {
-  const list = itemsOf(x.trip_id).filter(v => v.date === x.date && v.id !== x.id).sort(byOrd);
-  if (!list.length) return 1;
+/* 새 일정·날짜나 시간을 바꾼 일정을 그날 알맞은 자리에 넣고 순서 번호 정리
+   시간이 있으면 그 시간 자리에, 없으면 그날 맨 뒤에 */
+function placeInDay(x) {
+  const others = sortDay(itemsOf(x.trip_id).filter(v => v.date === x.date && v.id !== x.id));
+  let idx = others.length;
   if (x.time) {
-    const i = list.findIndex(v => v.time && v.time > x.time);
-    if (i === 0) return list[0].ord - 1;
-    if (i > 0) return (list[i - 1].ord + list[i].ord) / 2;
+    let last = '', k = -1;
+    others.forEach((v, i) => { last = v.time || last; if (last && last <= x.time) k = i; });
+    idx = k + 1;
   }
-  return list[list.length - 1].ord + 1;
+  others.splice(idx, 0, x);
+  renumber(others);
 }
 
 /* ───────── 라이트박스 ───────── */
@@ -694,39 +745,97 @@ function showLB() {
   $('#lb').classList.add('on');
 }
 
-/* ───────── 출력 (인쇄·PDF·이미지) ───────── */
-function printHtml(t) {
-  const days = tripDays(t);
-  const row = x => {
-    const isMove = x.category === '이동';
-    const nx = isMove && !x.place ? nextPlaceItem(x) : null;
-    const name = isMove ? `${x.title || ''} → ${x.place || (nx ? nx.place : '')}` : (x.title || x.place);
-    const extra = [x.category === '숙소' && validYmd(x.date) ? `${md(x.date)}→${md(checkoutOf(x))} ${nightsOf(x)}박${x.end_time ? ' · 체크아웃 ' + x.end_time : ''}` : '',
-      !isMove && x.title && x.place ? x.place : '', x.cost ? money(x.cost) : '', x.memo].filter(Boolean).join(' · ');
-    return `<tr><td class="t">${esc(x.category === '숙소' ? (x.time ? '체크인 ' + x.time : '체크인') : x.time)}</td>
-      <td class="c">${iconOf(x.category)} ${x.category}</td><td><b>${esc(name)}</b>${extra ? `<div class="m">${esc(extra)}</div>` : ''}</td></tr>`;
-  };
-  const its = itemsOf(t.id);
-  const body = days.map((d, i) => {
-    const outs = its.filter(x => x.category === '숙소' && validYmd(x.date) && x.date < d && checkoutOf(x) === d);
-    const main = its.filter(x => x.date === d).sort(byOrd);
-    const tonight = its.find(x => sleepsOn(x, d));
-    return `<div class="pd"><h2>${i + 1}일차 · ${md(d)}<span style="float:right;font-weight:500;font-size:.85em">${tonight ? '🏨 ' + esc(tonight.title || tonight.place) : ''}</span></h2>
-      <table>${outs.map(x => `<tr><td class="t">${esc(x.end_time)}</td><td class="c">🧳 체크아웃</td><td>${esc(x.title || x.place)}</td></tr>`).join('')}
-      ${main.map(row).join('') || '<tr><td colspan="3" class="m">일정 없음</td></tr>'}</table></div>`;
-  }).join('');
-  const loose = its.filter(x => !days.includes(x.date)).sort(byOrd);
-  const pk = t.packing || [];
-  return `<div class="ph1"><span class="em">${esc(t.emoji)}</span><div><h1>${esc(t.title)}</h1><div>${esc(dateLabel(t))} ${tagsOf(t).map(g => '#' + esc(g)).join(' ')}</div></div></div>
-    ${t.memo ? `<div class="note">${esc(t.memo)}</div>` : ''}${body}
-    ${loose.length ? `<div class="pd"><h2>날짜 미정</h2><table>${loose.map(row).join('')}</table></div>` : ''}
-    ${pk.length ? `<div class="pd"><h2>🧳 준비물</h2><div class="pk-p">${pk.map(p => `${p.d ? '☑' : '☐'} ${esc(p.t)}`).join('<br>')}</div></div>` : ''}`;
+/* ───────── 출력 (인쇄·PDF·이미지) — 기존 웹앱과 같은 선택지 ───────── */
+const PR = { mode: 'day', cols: 1, pages: 1, cats: CATS.map(c => c[0]), pack: true, cost: true, memo: true, photos: false };
+const PAGE_H = 1123; // A4 세로 (96dpi)
+
+function pRow(x, opt) {
+  const col = CCOL[x.category] || CCOL['기타'];
+  const isMove = x.category === '이동';
+  let first = esc(x.time), label = esc(x.category);
+  if (opt.out) { label = '체크아웃'; first = esc(x.end_time); }
+  if (opt.wide) { const i = opt.days.indexOf(x.date); first = x.date ? `${i >= 0 ? i + 1 + '일차 ' : ''}${md(x.date)}${x.time ? ' ' + esc(x.time) : ''}` : '날짜 미정'; }
+  const nx = isMove && !x.place ? nextPlaceItem(x) : null;
+  const name = isMove ? `${x.title || ''} → ${x.place || (nx ? nx.place : '')}` : (x.title || x.place);
+  const range = x.category === '숙소' && validYmd(x.date) && !opt.out
+    ? `${md(x.date)}${x.time ? ' ' + x.time : ''} → ${md(checkoutOf(x))}${x.end_time ? ' ' + x.end_time : ''} · ${nightsOf(x)}박` : '';
+  const meta = opt.out ? [] : [!isMove && x.title && x.place ? '📍 ' + x.place : '', PR.cost && costNum(x.cost) ? won(costNum(x.cost)) : '', x.memo].filter(Boolean);
+  const imgs = PR.photos && !opt.out ? (x.photos || []).slice(0, 4) : [];
+  return `<div class="p-row${opt.wide ? ' wide' : ''}"><span class="p-time">${first}</span>
+    <span class="p-cat" style="color:${col};background:${col}1f">${label}</span>
+    <div><div class="p-t">${esc(name)}</div>${range ? `<div class="p-r" style="color:${col}">${esc(range)}</div>` : ''}
+      ${meta.length ? `<div class="p-m">${meta.map(esc).join('  ·  ')}</div>` : ''}
+      ${imgs.length ? `<div class="p-img">${imgs.map(imgTag).join('')}</div>` : ''}</div></div>`;
 }
-function fitPage(pg) {
-  pg.style.zoom = 1;
-  pg.style.fontSize = '15px';
-  for (let f = 15; f >= 10.5 && pg.scrollHeight > 1123; f -= 0.5) pg.style.fontSize = f + 'px'; // A4 한 장에 맞게 글자 크기 자동 조절
+
+function printHtml(t) {
+  const days = tripDays(t), its = itemsOf(t.id).filter(x => PR.cats.includes(x.category) || (!ICON[x.category] && PR.cats.includes('기타')));
+  const all = itemsOf(t.id);
+  let body = '';
+  if (PR.mode === 'day') {
+    body = days.map((d, i) => {
+      const outs = PR.cats.includes('숙소') ? all.filter(x => x.category === '숙소' && validYmd(x.date) && x.date < d && checkoutOf(x) === d) : [];
+      const main = sortDay(its.filter(x => x.date === d));
+      const tonight = all.find(x => sleepsOn(x, d));
+      if (!outs.length && !main.length) return '';
+      return `<div class="pd"><h2><span>DAY ${i + 1}</span> ${md(d)}${tonight ? `<em>🏨 ${esc(tonight.title || tonight.place)}</em>` : ''}</h2>
+        ${outs.map(x => pRow(x, { out: true })).join('')}${main.map(x => pRow(x, {})).join('')}</div>`;
+    }).join('');
+    const loose = sortDay(its.filter(x => !days.includes(x.date)));
+    if (loose.length) body += `<div class="pd"><h2>날짜 미정</h2>${loose.map(x => pRow(x, {})).join('')}</div>`;
+  } else {
+    const ord = orderedItems(t);
+    body = CATS.map(c => c[0]).filter(c => PR.cats.includes(c)).map(c => {
+      const list = ord.filter(x => x.category === c || (c === '기타' && !ICON[x.category]));
+      return list.length ? `<div class="pd"><h2>${iconOf(c)} ${c} <small>${list.length}</small></h2>${list.map(x => pRow(x, { wide: true, days })).join('')}</div>` : '';
+    }).join('');
+  }
+  const extra = [];
+  if (PR.cost) {
+    const by = {}; all.forEach(x => { const n = costNum(x.cost); if (n) by[x.category] = (by[x.category] || 0) + n; });
+    const tot = Object.values(by).reduce((a, b) => a + b, 0);
+    if (tot) extra.push(`<div class="pd"><h2>💰 경비</h2><div class="p-cost">${Object.keys(by).map(c => `<span>${iconOf(c)} ${esc(c)} <b>${won(by[c])}</b></span>`).join('')}<span class="tot">합계 <b>${won(tot)}</b></span></div></div>`);
+  }
+  if (PR.memo && (t.memo || t.review)) extra.push(`<div class="pd"><h2>📝 메모 · 후기</h2>${t.memo ? `<div class="note">${esc(t.memo)}</div>` : ''}${t.review ? `<div class="note">${t.rating ? '★'.repeat(t.rating) + ' ' : ''}${esc(t.review)}</div>` : ''}</div>`);
+  if (PR.pack && (t.packing || []).length) extra.push(`<div class="pd"><h2>🧳 준비물</h2><div class="pk-p">${t.packing.map(p => `<span>${p.d ? '☑' : '☐'} ${esc(p.t)}</span>`).join('')}</div></div>`);
+  return `<div class="ph1"><span class="em">${esc(t.emoji)}</span><div><h1>${esc(t.title)}</h1><div>${esc(dateLabel(t))} ${tagsOf(t).map(g => '#' + esc(g)).join(' ')}</div></div></div>
+    <div class="p-body${PR.cols === 2 ? ' two' : ''}">${body || '<div class="p-m">출력할 일정이 없어요</div>'}${extra.join('')}</div>`;
+}
+
+function printBar() {
+  const seg = (k, opts) => `<div class="seg mini">${opts.map(([v, l]) => `<button class="${PR[k] === v ? 'on' : ''}" onclick="A.setPR('${k}',${typeof v === 'string' ? `'${v}'` : v})">${l}</button>`).join('')}</div>`;
+  const chip = (on, label, fn, c) => `<button class="pu-chip ${on ? 'on' : ''}" ${c ? `style="--c:${c}"` : ''} onclick="${fn}">${label}</button>`;
+  return `<div class="pu-row"><button class="pb" onclick="A.pvClose()">✕ 닫기</button><span class="pu-info" id="puInfo"></span><span class="sp"></span>
+      <button class="pb" onclick="A.pvImg()">🖼 이미지</button><button class="pb pri" onclick="window.print()">🖨 인쇄 · PDF</button></div>
+    <div class="pu-row"><span class="pu-lbl">구성</span>${seg('mode', [['day', '일차별'], ['cat', '분류별']])}
+      <span class="pu-lbl">단</span>${seg('cols', [[1, '1단'], [2, '2단']])}
+      <span class="pu-lbl">장수</span>${seg('pages', [[1, '1장'], [2, '2장'], [3, '3장'], ['auto', '원래 크기']])}</div>
+    <div class="pu-row"><span class="pu-lbl">분류</span>${CATS.map(([c, ic]) => chip(PR.cats.includes(c), `${ic} ${c}`, `A.prCat('${c}')`, CCOL[c])).join('')}</div>
+    <div class="pu-row"><span class="pu-lbl">추가</span>${chip(PR.pack, '🧳 준비물', `A.setPR('pack',${!PR.pack})`)}${chip(PR.cost, '💰 경비', `A.setPR('cost',${!PR.cost})`)}
+      ${chip(PR.memo, '📝 메모·후기', `A.setPR('memo',${!PR.memo})`)}${chip(PR.photos, '📷 사진', `A.setPR('photos',${!PR.photos})`)}</div>`;
+}
+
+/* 고른 장수 안에 들어가도록 글자 크기 자동 조절 + 쪽 나뉨 표시 */
+function fitPage() {
+  const pg = $('#page'); if (!pg) return;
+  pg.style.zoom = 1; pg.style.minHeight = '0px';
+  let f = 15;
+  pg.style.fontSize = f + 'px';
+  if (PR.pages !== 'auto') { const lim = PR.pages * PAGE_H - 4; while (f > 8 && pg.scrollHeight > lim) { f -= 0.5; pg.style.fontSize = f + 'px'; } }
+  const n = Math.max(1, Math.ceil((pg.scrollHeight - 4) / PAGE_H));
+  pg.style.minHeight = n * PAGE_H + 'px';
+  $('#psLines').innerHTML = Array.from({ length: n - 1 }, (_, i) => `<div style="top:${(i + 1) * PAGE_H}px"><span>${i + 2}쪽</span></div>`).join('');
+  const info = $('#puInfo'), small = f < 10.5;
+  info.textContent = `A4 · 총 ${n}장 · 글자 ${Math.round(f / 15 * 100)}%${small ? ' · 너무 작아요, 장수를 늘리거나 2단으로' : ''}`;
+  info.classList.toggle('warn', small);
   pg.style.zoom = Math.min(1, (window.innerWidth - 20) / 794);
+}
+function renderPrint() {
+  const t = tripOf(S.tripId); if (!t) return;
+  $('#puBar').innerHTML = printBar();
+  $('#page').innerHTML = `<div id="psLines"></div>${printHtml(t)}`;
+  requestAnimationFrame(fitPage);
+  $$('#page img').forEach(im => { if (!im.complete) im.addEventListener('load', fitPage, { once: true }); });
 }
 function loadScript(src) {
   return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
@@ -761,9 +870,14 @@ const A = window.A = {
   search(v) { S.q = v; const list = $('#list'); const tmp = document.createElement('div'); tmp.innerHTML = homeView(); list.innerHTML = $('#list', tmp).innerHTML; },
   theme(g) { S.theme = g; render(); },
   open(id) { location.hash = '#/trip/' + id; },
-  tab(k) { S.tab = k; render(); },
-  day(i) { S.day = i; render(); },
+  tab(k) {
+    S.tab = k; render();
+    const nav = $('#daytabs'); if (nav) { const b = $('.on', nav); if (b) nav.scrollLeft = b.offsetLeft - 40; if (nav.getBoundingClientRect().top < 0) nav.scrollIntoView(); }
+  },
+  costView(k) { S.costView = k; render(); },
   close() { closeSheet(); },
+  fmtNum(el) { const v = el.value.replace(/[^\d]/g, ''); if (/^[\d,]*$/.test(el.value)) el.value = v ? (+v).toLocaleString('ko-KR') : ''; },
+  addTag(g) { const f = $('#t_tags'), cur = f.value.split(',').map(x => x.trim()).filter(Boolean); if (!cur.includes(g)) cur.push(g); f.value = cur.join(', '); },
 
   /* 여행 */
   editTrip(id) { tripSheet(id ? tripOf(id) : null); },
@@ -840,10 +954,10 @@ const A = window.A = {
   _pkRender() { const box = $('#packing'), t = tripOf(S.tripId); if (box && t) box.outerHTML = packingView(t); },
 
   /* 일정 */
-  newItem(d) {
+  newItem(d, cat) {
     const t = tripOf(S.tripId), days = tripDays(t);
-    if (!d) d = S.tab === 'day' ? days[S.day] : (days.includes(today()) ? today() : days[0]);
-    E = normItem({ id: newId(), trip_id: t.id, date: d || '', category: '갈곳' });
+    if (d === undefined) d = days.includes(S.tab) ? S.tab : (days.includes(today()) ? today() : days[0]);
+    E = normItem({ id: newId(), trip_id: t.id, date: d || '', category: cat || '갈곳', created_at: nowISO() });
     E._new = []; E._removed = []; E._orig = null;
     itemSheet();
     if (!isMobile) setTimeout(() => $('#i_title') && $('#i_title').focus(), 250);
@@ -864,11 +978,14 @@ const A = window.A = {
     if (E.category !== '숙소') { E.end_date = ''; E.end_time = ''; }
     else if (E.end_date && (!E.date || E.end_date <= E.date)) E.end_date = '';
     const o = E._orig;
-    if (!o || o.date !== E.date || (E.time && o.time !== E.time)) E.ord = ordFor(E); // 새 일정·날짜/시간 변경 → 시간 순서 자리로
+    const replace = !o || o.date !== E.date || o.time !== E.time; // 새 일정·날짜/시간 변경 → 알맞은 자리로
     // 장소가 바뀌면 좌표를 비워두고, 시트에 저장할 때 Apps Script가 새로 찾아 채워요
     if (o && (o.place !== E.place || o.title !== E.title || o.category !== E.category)) E.route = '';
     const x = normItem(E);
-    putItem(x); closeSheet(true); render(); toast('저장했어요');
+    putItem(x);
+    if (replace) placeInDay(x);
+    if (o && o.date !== x.date) renumber(sortDay(itemsOf(x.trip_id).filter(v => v.date === o.date)));
+    closeSheet(true); render(); toast('저장했어요');
   },
   delItem() {
     if (!confirm('이 일정을 삭제할까요?')) return;
@@ -877,16 +994,15 @@ const A = window.A = {
   },
   move(dir) {
     readItemForm();
-    const list = itemsOf(E.trip_id).filter(x => x.date === E._orig.date).sort(byOrd);
+    const list = sortDay(itemsOf(E.trip_id).filter(x => x.date === E._orig.date));
     const i = list.findIndex(x => x.id === E.id), j = i + dir;
     if (j < 0 || j >= list.length) return;
-    const a = list[i], b = list[j], tmp = a.ord;
-    a.ord = b.ord; b.ord = tmp;
-    if (a.ord === b.ord) { a.ord += dir * 0.001; }
-    putItem(a); putItem(b); E.ord = a.ord;
+    if (list[i].time && list[j].time) { toast('둘 다 시간이 있으면 시간 순서로 정렬돼요. 시간을 바꿔주세요', 3500); return; }
+    [list[i], list[j]] = [list[j], list[i]];
+    renumber(list);
+    E.ord = list.find(x => x.id === E.id).ord;
     const y = $('#sheet').scrollTop; itemSheet(); $('#sheet').scrollTop = y; render();
   },
-
   /* 사진 보기 */
   lightbox(id, k) {
     const x = S.items.find(v => v.id === id); if (!x) return;
@@ -902,21 +1018,21 @@ const A = window.A = {
 
   /* 출력 */
   print(id) {
-    const t = tripOf(id); if (!t) return;
-    $('#pv').innerHTML = `<div class="pv-bar"><button onclick="A.pvClose()">✕ 닫기</button><span class="sp"></span>
-      <button onclick="A.pvImg()">🖼 이미지</button><button onclick="window.print()">🖨 인쇄 · PDF</button></div>
-      <div class="page" id="page">${printHtml(t)}</div>`;
+    if (!tripOf(id)) return;
+    $('#pv').innerHTML = `<div class="pv-bar" id="puBar"></div><div class="page" id="page"></div>`;
     $('#pv').classList.add('on'); document.body.style.overflow = 'hidden';
-    requestAnimationFrame(() => fitPage($('#page')));
+    renderPrint();
   },
+  setPR(k, v) { PR[k] = v; renderPrint(); },
+  prCat(c) { PR.cats = PR.cats.includes(c) ? PR.cats.filter(x => x !== c) : CATS.map(x => x[0]).filter(x => x === c || PR.cats.includes(x)); renderPrint(); },
   pvClose() { $('#pv').classList.remove('on'); $('#pv').innerHTML = ''; document.body.style.overflow = ''; },
   async pvImg() {
     toast('이미지 만드는 중…');
     try {
       if (!window.html2canvas) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
-      const pg = $('#page'), zm = pg.style.zoom; pg.style.zoom = 1;
-      const c = await html2canvas(pg, { scale: 2, backgroundColor: '#ffffff' });
-      pg.style.zoom = zm;
+      const pg = $('#page'), zm = pg.style.zoom; pg.style.zoom = 1; $('#psLines').style.display = 'none';
+      const c = await html2canvas(pg, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
+      pg.style.zoom = zm; $('#psLines').style.display = '';
       const blob = await new Promise(r => c.toBlob(r, 'image/png'));
       const t = tripOf(S.tripId), name = `${(t && t.title) || '여행'}_일정.png`.replace(/[\\/:*?"<>|]/g, '_');
       const file = new File([blob], name, { type: 'image/png' });
@@ -961,8 +1077,7 @@ window.toast = toast;
 function routeFromHash() {
   const m = location.hash.match(/^#\/trip\/([\w-]+)/);
   const id = m ? m[1] : null;
-  if (id !== S.tripId) { S.tripId = id; S.tab = 'all'; const t = id && tripOf(id); S.day = 0;
-    if (t) { const i = tripDays(t).indexOf(today()); if (i >= 0) S.day = i; } window.scrollTo(0, 0); }
+  if (id !== S.tripId) { S.tripId = id; S.tab = 'all'; window.scrollTo(0, 0); }
 }
 
 window.addEventListener('hashchange', () => { closeSheet(); A.lbClose(); A.pvClose(); routeFromHash(); render(); });
@@ -988,7 +1103,7 @@ document.addEventListener('keydown', e => {
 let tx = 0;
 $('#lb').addEventListener('touchstart', e => { tx = e.touches[0].clientX; }, { passive: true });
 $('#lb').addEventListener('touchend', e => { const dx = e.changedTouches[0].clientX - tx; if (Math.abs(dx) > 50) A.lbGo(dx < 0 ? 1 : -1); }, { passive: true });
-window.addEventListener('resize', () => { const p = $('#page'); if (p && $('#pv').classList.contains('on')) fitPage(p); });
+window.addEventListener('resize', () => { if ($('#pv').classList.contains('on')) fitPage(); });
 
 window.addEventListener('online', () => { flush(); pull(true); });
 window.addEventListener('offline', renderSync);
