@@ -417,6 +417,68 @@ function linksOf(x) {
   return L.length ? `<div class="lk">${L.join('')}</div>` : '';
 }
 
+/* ───────── 일정 사이 이동시간 (카카오 자동차 길찾기 · 지금 출발 기준) ─────────
+   타임라인 세로선 옆에 "🚗 25분 · 12.3km" 표시. 키가 없거나 실패하면 직선거리만 */
+const LEGS = new Map(); // 'lng,lat>lng,lat' → { s: 초, m: 미터, at } 또는 { err }
+let LEG_NOKEY = false, LEG_BUSY = false, LEG_ERR_SHOWN = false;
+const LEG_TTL = 10 * 60 * 1000;
+const ptKey = p => p[0].toFixed(5) + ',' + p[1].toFixed(5);
+function fmtDur(sec) {
+  const m = Math.max(1, Math.round(sec / 60));
+  return m < 60 ? `${m}분` : `${Math.floor(m / 60)}시간${m % 60 ? ' ' + (m % 60) + '분' : ''}`;
+}
+function legText(k, line) {
+  const v = LEGS.get(k);
+  if (v && v.s != null) return `🚗 ${fmtDur(v.s)} · ${(v.m / 1000).toFixed(1)}km`;
+  if (LEG_NOKEY || (v && v.err)) return `📏 직선 ${line}km`;
+  return `🚗 계산 중… · 직선 ${line}km`;
+}
+function legRow(a, b) {
+  if (!a || !b) return '';
+  const d = km(a, b);
+  if (d < 0.3) return ''; // 같은 곳이면 표시 안 함
+  const k = ptKey(a) + '>' + ptKey(b), line = d.toFixed(1);
+  return `<div class="tl-leg" data-k="${k}" data-line="${line}"><span>${legText(k, line)}</span></div>`;
+}
+/* 하루 일정 사이사이에 이동시간 줄 끼워 넣기 */
+function rowsWithLegs(main, startPt) {
+  let cur = startPt, out = '';
+  main.forEach(x => {
+    const isMove = x.category === '이동';
+    let s, e;
+    if (isMove) {
+      const nx = x.place ? null : nextPlaceItem(x);
+      s = (x.geo && x.geo.from) || cur;
+      e = x.place ? x.geo && x.geo.to : nx && nx.geo && nx.geo.to;
+    } else s = e = x.geo && x.geo.to;
+    if (!isMove) out += legRow(cur, s);   // 앞 장소 → 이 장소
+    out += itemCard(x);
+    if (isMove) out += legRow(s, e);      // 이동 일정 자체의 출발 → 도착
+    cur = e || s || cur;
+  });
+  return out;
+}
+async function fillLegs() {
+  if (LEG_NOKEY || LEG_BUSY || !navigator.onLine) return;
+  const now = Date.now();
+  const need = [...new Set($$('.tl-leg[data-k]').map(el => el.dataset.k))]
+    .filter(k => { const v = LEGS.get(k); return !v || (v.s != null && now - v.at > LEG_TTL); }).slice(0, 25);
+  if (!need.length) return;
+  LEG_BUSY = true;
+  try {
+    const r = await api('legs', VIEW ? { keys: need, token: VIEW.token } : { keys: need }, VIEW ? '' : getKey());
+    if (r.nokey) LEG_NOKEY = true;
+    Object.entries(r.legs || {}).forEach(([k, v]) => LEGS.set(k, Object.assign({ at: Date.now() }, v)));
+    const bad = Object.values(r.legs || {}).find(v => v.err);
+    if (bad && !LEG_ERR_SHOWN && !VIEW) { LEG_ERR_SHOWN = true; toast('이동시간을 못 가져온 구간이 있어요: ' + bad.err, 5000); }
+  } catch (e) {
+    if (/알 수 없는 요청/.test(e.message || '')) LEG_NOKEY = true; // Apps Script가 아직 예전 버전
+  } finally {
+    LEG_BUSY = false;
+    $$('.tl-leg[data-k]').forEach(el => { el.firstElementChild.textContent = legText(el.dataset.k, el.dataset.line); });
+  }
+}
+
 /* ───────── 화면 ───────── */
 function render() {
   const app = $('#app');
@@ -424,13 +486,14 @@ function render() {
   if (VIEW) {
     const vt = S.tripId && tripOf(S.tripId);
     app.innerHTML = vt ? tripView(vt) : viewMsg();
-    renderSync(); return;
+    renderSync(); if (vt) setTimeout(fillLegs, 50); return;
   }
   if (!S.user) { app.innerHTML = loginView(); return; }
   const t = S.tripId && tripOf(S.tripId);
   if (S.tripId && !t) { S.tripId = null; if (location.hash) history.replaceState(null, '', location.pathname); }
   app.innerHTML = t ? tripView(t) : homeView();
   renderSync();
+  if (t) setTimeout(fillLegs, 50);
   hydratePhotos(app);
 }
 
@@ -593,7 +656,7 @@ function dayBlock(t, d, i, total) {
     ${d ? `<div class="day-sum"><span>🏨 ${stay}</span><span>🍽️ 식사 ${cnt('식사')}</span><span>📍 갈곳 ${cnt('갈곳') + cnt('체험')}</span></div>` : ''}
     <div class="tl">
       ${outs.map(x => itemCard(x, 'out')).join('')}
-      ${main.map(x => itemCard(x)).join('')}
+      ${rowsWithLegs(main, outs[0] && outs[0].geo && outs[0].geo.to)}
       ${mids.map(x => itemCard(x, 'mid', d)).join('')}
       ${!outs.length && !main.length && !mids.length ? `<div class="tl-empty">${VIEW ? '이 날은 일정이 없어요.' : '아직 일정이 없어요. 아래에서 바로 추가해보세요.'}</div>` : ''}
     </div>
