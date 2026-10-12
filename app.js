@@ -369,7 +369,7 @@ function nextPlaceItem(x) {
 }
 
 /* 머무는 예상 시간 (분) — 숙소·이동 말고 식사·갈곳·체험·쇼핑·기타에 */
-const STAY_OPTS = [0, 15, 30, 45, 60, 90, 120, 150, 180, 240, 300, 360, 480];
+const STAY_QUICK = [30, 60, 90, 120, 180]; // 빠른 선택 (직접 입력도 가능)
 const stayable = x => x.category !== '숙소' && x.category !== '이동';
 const fmtStay = m => m < 60 ? `${m}분` : `${Math.floor(m / 60)}시간${m % 60 ? ' ' + (m % 60) + '분' : ''}`;
 function stayText(x) {
@@ -893,7 +893,10 @@ function itemSheet() {
     <div class="hint">${E.place ? (geoTo ? '📍 좌표 저장됨 · 티맵·네이버 길찾기 연결' : '저장하면 좌표를 찾아 길찾기를 연결해요') : ''}</div>
     <div class="row"><div><label class="f">비용</label><input class="in" id="i_cost" value="${esc(costNum(E.cost) ? costNum(E.cost).toLocaleString('ko-KR') : E.cost)}" inputmode="numeric" placeholder="35,000" oninput="A.fmtNum(this)"></div>
       <div><label class="f">링크</label><input class="in" id="i_link" value="${esc(E.link)}" placeholder="예약·블로그 주소"></div></div>
-    ${stayable(E) ? `<label class="f">머무는 예상 시간</label><select class="in" id="i_stay">${STAY_OPTS.map(m => `<option value="${m}" ${+E.stay === m ? 'selected' : ''}>${m ? fmtStay(m) : '정하지 않음'}</option>`).join('')}${E.stay && !STAY_OPTS.includes(+E.stay) ? `<option value="${+E.stay}" selected>${fmtStay(+E.stay)}</option>` : ''}</select>` : ''}
+    ${stayable(E) ? `<label class="f">머무는 예상 시간 <span style="font-weight:500">(직접 입력하거나 아래에서 골라요)</span></label>
+      <div class="row stay-in"><input class="in" id="i_sh" type="number" inputmode="numeric" min="0" max="24" placeholder="0" value="${E.stay >= 60 ? Math.floor(E.stay / 60) : ''}"><span>시간</span>
+        <input class="in" id="i_sm" type="number" inputmode="numeric" min="0" max="59" placeholder="0" value="${E.stay % 60 || ''}"><span>분</span></div>
+      <div class="sug">${STAY_QUICK.map(m => `<button type="button" onclick="A.staySet(${m})">${fmtStay(m)}</button>`).join('')}<button type="button" onclick="A.staySet(0)">지우기</button></div>` : ''}
     <label class="f">메모</label><textarea class="in" id="i_memo">${esc(E.memo)}</textarea>
     <label class="f">사진 · 캡처 ${isMobile ? '' : '<span style="font-weight:500">(Ctrl+V로 붙여넣기, 끌어다 놓기 가능)</span>'}</label>
     <div class="ph-grid" id="i_ph">${photosEditor()}</div>
@@ -916,7 +919,7 @@ function readItemForm() {
   E.title = $('#i_title').value.trim(); E.place = $('#i_place').value.trim();
   const cv = $('#i_cost').value.trim(); E.cost = /^[\d,\s₩원]+$/.test(cv) ? cv.replace(/\D/g, '') : cv; E.link = $('#i_link').value.trim(); E.memo = $('#i_memo').value.trim(); // 비용 숫자는 쉼표 없이 저장
   if ($('#i_end')) E.end_date = $('#i_end').value || ''; if ($('#i_etime')) E.end_time = $('#i_etime').value;
-  if ($('#i_stay')) E.stay = +$('#i_stay').value || 0;
+  if ($('#i_sh')) E.stay = Math.min(24 * 60, Math.max(0, (parseInt($('#i_sh').value, 10) || 0) * 60 + (parseInt($('#i_sm').value, 10) || 0)));
 }
 async function addPhotos(files) {
   if (!E) return;
@@ -1101,6 +1104,7 @@ const A = window.A = {
 
   /* 여행 */
   editTrip(id) { tripSheet(id ? tripOf(id) : null); },
+  staySet(m) { const h = $('#i_sh'), mm = $('#i_sm'); if (!h) return; h.value = m >= 60 ? Math.floor(m / 60) : ''; mm.value = m % 60 || ''; },
   pickColor(b) { $$('.colors button').forEach(x => x.classList.toggle('on', x === b)); },
   pickOne(b) { $$('button', b.parentNode).forEach(x => x.classList.toggle('on', x === b)); },
   dateIn(el, next) {
