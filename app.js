@@ -405,14 +405,13 @@ function linksOf(x) {
     if (dname) {
       const nv = naverRouteUrl(x.title, from, dname, to);
       L.push(nv ? A_(nv, '🚗 네이버 길찾기', nv.startsWith('http')) : A_(`https://map.naver.com/p/search/${enc(dname)}`, '🚗 네이버 (도착지 검색)', true));
-      const g = `https://www.google.com/maps/dir/?api=1${x.title ? '&origin=' + enc(x.title) : ''}&destination=${enc(dname)}&travelmode=driving`;
-      L.push(A_(g, '🚗 구글 길찾기', true));
       L.push(tmapLink(dname, to));
     }
   } else if (x.place) {
-    L.push(A_(`https://map.naver.com/p/search/${enc(x.place)}`, '📍 네이버 지도', true));
-    L.push(A_(`https://www.google.com/maps/search/?api=1&query=${enc(x.place)}`, '구글 지도', true));
-    L.push(tmapLink(x.place, x.geo && x.geo.to));
+    // 휴대폰: 지금 위치에서 그 장소까지 네이버 길찾기 / PC: 네이버 지도에서 장소 보기
+    const to = x.geo && x.geo.to, nv = naverRouteUrl('', null, x.place, to);
+    L.push(nv ? A_(nv, '🚗 네이버 길찾기', false) : A_(`https://map.naver.com/p/search/${enc(x.place)}`, '📍 네이버 지도', true));
+    L.push(tmapLink(x.place, to));
   }
   if (x.link) L.push(A_(/^https?:/i.test(x.link) ? x.link : 'https://' + x.link, '🔗 링크', true));
   return L.length ? `<div class="lk">${L.join('')}</div>` : '';
