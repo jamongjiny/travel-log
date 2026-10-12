@@ -148,7 +148,7 @@ function normItem(x) {
   return {
     id: String(x.id), trip_id: String(x.trip_id), date: x.date || '', end_date: x.end_date || '', time: x.time || '', end_time: x.end_time || '',
     category: x.category || '기타', title: x.title || '', place: x.place || '', cost: x.cost || '',
-    link: x.link || '', memo: x.memo || '', ord: +x.ord || 0, route: x.route || '', geo: parseRoute(x.route),
+    link: x.link || '', memo: x.memo || '', ord: +x.ord || 0, route: x.route || '', geo: parseRoute(x.route), stay: +x.stay || 0,
     photos: Array.isArray(x.photos) ? x.photos : [], created_at: x.created_at || ''
   };
 }
@@ -158,7 +158,7 @@ const fromSheetTrip = r => normTrip({
 });
 const fromSheetItem = r => normItem({
   id: r.id, trip_id: r.tripId, date: r.date, end_date: r.endDate, time: r.time, end_time: r.endTime, category: r.category,
-  title: r.title, place: r.place, cost: r.cost, link: r.link, memo: r.memo, ord: r.order, route: r.route,
+  title: r.title, place: r.place, cost: r.cost, link: r.link, memo: r.memo, ord: r.order, route: r.route, stay: r.stay,
   photos: imgIds(r.images).map(id => ({ id })), created_at: r.createdAt
 });
 const tripRow = t => ({
@@ -168,7 +168,7 @@ const tripRow = t => ({
 });
 const itemRow = x => ({
   id: x.id, tripId: x.trip_id, date: x.date, endDate: x.end_date, time: x.time, endTime: x.end_time, category: x.category,
-  title: x.title, place: x.place, cost: x.cost, link: x.link, memo: x.memo, order: String(x.ord), route: x.route,
+  title: x.title, place: x.place, cost: x.cost, link: x.link, memo: x.memo, order: String(x.ord), route: x.route, stay: x.stay ? String(x.stay) : '',
   images: x.photos.map(p => p.id).filter(Boolean).join(','), createdAt: x.created_at
 });
 
@@ -368,6 +368,18 @@ function nextPlaceItem(x) {
   return list.slice(i + 1).find(v => v.place && v.category !== '이동') || list.slice(i + 1).find(v => v.place) || null;
 }
 
+/* 머무는 예상 시간 (분) — 숙소·이동 말고 식사·갈곳·체험·쇼핑·기타에 */
+const STAY_OPTS = [0, 15, 30, 45, 60, 90, 120, 150, 180, 240, 300, 360, 480];
+const stayable = x => x.category !== '숙소' && x.category !== '이동';
+const fmtStay = m => m < 60 ? `${m}분` : `${Math.floor(m / 60)}시간${m % 60 ? ' ' + (m % 60) + '분' : ''}`;
+function stayText(x) {
+  let t = `⏱ ${fmtStay(+x.stay)} 머무름`;
+  if (/^\d{2}:\d{2}$/.test(x.time || '')) {
+    const [h, m] = x.time.split(':').map(Number), e = h * 60 + m + +x.stay;
+    t += ` · ~${String(Math.floor(e / 60) % 24).padStart(2, '0')}:${String(e % 60).padStart(2, '0')}${e >= 1440 ? ' (다음 날)' : ''}`;
+  }
+  return t;
+}
 const costNum = v => { const s = String(v || ''); return /^[\s₩원,\d.-]+$/.test(s) ? +(s.replace(/[^\d.-]/g, '')) || 0 : 0; };
 
 /* ───────── 지도 링크 ───────── */
@@ -686,6 +698,7 @@ function itemCard(x, mode, d) {
     sub.push(`${md(x.date)}${x.time ? ' ' + esc(x.time) : ''} → ${md(checkoutOf(x))}${x.end_time ? ' ' + esc(x.end_time) : ''} · ${nightsOf(x)}박`);
   }
   if (!isMove && x.place && x.title) sub.push('📍 ' + esc(x.place));
+  if (stayable(x) && x.stay) sub.push(stayText(x));
   const ph = x.photos || [];
   const thumbs = ph.length ? `<div class="thumbs">${ph.slice(0, 4).map((p, k) =>
     `<button onclick="event.stopPropagation();A.lightbox('${x.id}',${k})">${imgTag(p)}${k === 3 && ph.length > 4 ? `<span class="more">+${ph.length - 4}</span>` : ''}</button>`).join('')}</div>` : '';
@@ -880,6 +893,7 @@ function itemSheet() {
     <div class="hint">${E.place ? (geoTo ? '📍 좌표 저장됨 · 티맵·네이버 길찾기 연결' : '저장하면 좌표를 찾아 길찾기를 연결해요') : ''}</div>
     <div class="row"><div><label class="f">비용</label><input class="in" id="i_cost" value="${esc(costNum(E.cost) ? costNum(E.cost).toLocaleString('ko-KR') : E.cost)}" inputmode="numeric" placeholder="35,000" oninput="A.fmtNum(this)"></div>
       <div><label class="f">링크</label><input class="in" id="i_link" value="${esc(E.link)}" placeholder="예약·블로그 주소"></div></div>
+    ${stayable(E) ? `<label class="f">머무는 예상 시간</label><select class="in" id="i_stay">${STAY_OPTS.map(m => `<option value="${m}" ${+E.stay === m ? 'selected' : ''}>${m ? fmtStay(m) : '정하지 않음'}</option>`).join('')}${E.stay && !STAY_OPTS.includes(+E.stay) ? `<option value="${+E.stay}" selected>${fmtStay(+E.stay)}</option>` : ''}</select>` : ''}
     <label class="f">메모</label><textarea class="in" id="i_memo">${esc(E.memo)}</textarea>
     <label class="f">사진 · 캡처 ${isMobile ? '' : '<span style="font-weight:500">(Ctrl+V로 붙여넣기, 끌어다 놓기 가능)</span>'}</label>
     <div class="ph-grid" id="i_ph">${photosEditor()}</div>
@@ -902,6 +916,7 @@ function readItemForm() {
   E.title = $('#i_title').value.trim(); E.place = $('#i_place').value.trim();
   const cv = $('#i_cost').value.trim(); E.cost = /^[\d,\s₩원]+$/.test(cv) ? cv.replace(/\D/g, '') : cv; E.link = $('#i_link').value.trim(); E.memo = $('#i_memo').value.trim(); // 비용 숫자는 쉼표 없이 저장
   if ($('#i_end')) E.end_date = $('#i_end').value || ''; if ($('#i_etime')) E.end_time = $('#i_etime').value;
+  if ($('#i_stay')) E.stay = +$('#i_stay').value || 0;
 }
 async function addPhotos(files) {
   if (!E) return;
@@ -958,7 +973,7 @@ function pRow(x, opt) {
   const name = isMove ? `${x.title || ''} → ${x.place || (nx ? nx.place : '')}` : (x.title || x.place);
   const range = x.category === '숙소' && validYmd(x.date) && !opt.out
     ? `${md(x.date)}${x.time ? ' ' + x.time : ''} → ${md(checkoutOf(x))}${x.end_time ? ' ' + x.end_time : ''} · ${nightsOf(x)}박` : '';
-  const meta = opt.out ? [] : [!isMove && x.title && x.place ? '📍 ' + x.place : '', PR.cost && costNum(x.cost) ? won(costNum(x.cost)) : '', x.memo].filter(Boolean);
+  const meta = opt.out ? [] : [!isMove && x.title && x.place ? '📍 ' + x.place : '', stayable(x) && x.stay ? stayText(x) : '', PR.cost && costNum(x.cost) ? won(costNum(x.cost)) : '', x.memo].filter(Boolean);
   const imgs = PR.photos && !opt.out ? (x.photos || []).slice(0, 4) : [];
   return `<div class="p-row${opt.wide ? ' wide' : ''}"><span class="p-time">${first}</span>
     <span class="p-cat" style="color:${col};background:${col}1f">${label}</span>
@@ -1207,6 +1222,7 @@ const A = window.A = {
     if (E._up) { toast('사진을 올리는 중이에요. 잠시 후 저장해주세요'); return; }
     if (!E.title && !E.place) { toast(E.category === '이동' ? '출발지를 적어주세요' : '이름을 적어주세요'); $('#i_title').focus(); return; }
     if (E.category !== '숙소') { E.end_date = ''; E.end_time = ''; }
+    if (!stayable(E)) E.stay = 0;
     else if (E.end_date && (!E.date || E.end_date <= E.date)) E.end_date = '';
     const o = E._orig;
     const replace = !o || o.date !== E.date || o.time !== E.time; // 새 일정·날짜/시간 변경 → 알맞은 자리로
