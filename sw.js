@@ -1,5 +1,5 @@
 /* 여행 기록장 서비스 워커 — 오프라인에서도 앱 화면이 열리게 */
-const V = 'tl-v9';
+const V = 'tl-v10';
 const SHELL = ['./', 'index.html', 'app.js', 'config.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {

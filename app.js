@@ -629,7 +629,7 @@ function tripView(t) {
   const st = ddayOf(t) || (isPast(t) ? '다녀옴' : '');
 
   const hideCost = VIEW && !VIEW.opt.cost;
-  const acts = VIEW ? `<button onclick="A.print('${t.id}')">🖨 출력 · 저장</button>`
+  const acts = VIEW ? `<button onclick="A.print('${t.id}')">🖼 이미지로 저장</button>`
     : `<button onclick="A.editTrip('${t.id}')">✏️ 편집</button><button onclick="A.share('${t.id}')">🔗 공유</button><button onclick="A.dupTrip('${t.id}')">📑 복제</button>
         <button onclick="A.print('${t.id}')">🖨 출력</button><button onclick="A.delTrip('${t.id}')">🗑 삭제</button>`;
   return `<div class="wrap">
@@ -1029,7 +1029,8 @@ function printBar() {
   const seg = (k, opts) => `<div class="seg mini">${opts.map(([v, l]) => `<button class="${PR[k] === v ? 'on' : ''}" onclick="A.setPR('${k}',${typeof v === 'string' ? `'${v}'` : v})">${l}</button>`).join('')}</div>`;
   const chip = (on, label, fn, c) => `<button class="pu-chip ${on ? 'on' : ''}" ${c ? `style="--c:${c}"` : ''} onclick="${fn}">${label}</button>`;
   return `<div class="pu-row"><button class="pb" onclick="A.pvClose()">✕ 닫기</button><span class="pu-info" id="puInfo"></span><span class="sp"></span>
-      <button class="pb" onclick="A.pvImg()">🖼 이미지</button><button class="pb pri" onclick="window.print()">🖨 인쇄 · PDF</button></div>
+      ${VIEW ? '<button class="pb pri" onclick="A.pvImg()">🖼 이미지로 저장</button>'   // 공유받은 사람: 이미지 저장만
+        : '<button class="pb" onclick="A.pvImg()">🖼 이미지</button><button class="pb pri" onclick="window.print()">🖨 인쇄 · PDF</button>'}</div>
     <div class="pu-row"><span class="pu-lbl">구성</span>${seg('mode', [['day', '일차별'], ['cat', '분류별']])}
       <span class="pu-lbl">단</span>${seg('cols', [[1, '1단'], [2, '2단']])}
       <span class="pu-lbl">장수</span>${seg('pages', [[1, '1장'], [2, '2장'], [3, '3장'], ['auto', '원래 크기']])}</div>
@@ -1444,6 +1445,7 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.se
 (function start() {
   if (!configured) { render(); return; }
   if (VIEW) {
+    document.body.classList.add('vm'); // 공유 보기: 브라우저 인쇄(Ctrl+P)도 막음
     const c = LS.get(viewCacheKey(), null);
     if (c && c.trip) applyShared(c);
     render(); pullShared(true);

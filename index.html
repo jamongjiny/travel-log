@@ -302,6 +302,8 @@ textarea.in{min-height:76px;resize:vertical}
 .ctotal b{font-size:18px}
 .box .seg.mini{margin-bottom:10px}
 
+/* 공유받은 사람은 인쇄·PDF 대신 이미지 저장만 */
+@media print{body.vm *{display:none!important}body.vm::before{content:"이 일정은 '이미지로 저장'으로만 저장할 수 있어요.";display:block;font:16px sans-serif;padding:40px;color:#000}}
 @media print{
   body>*:not(.pv){display:none!important}
   .pv{position:static;display:block!important;padding:0;background:#fff;overflow:visible}
