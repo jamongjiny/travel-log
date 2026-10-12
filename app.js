@@ -535,7 +535,7 @@ function tripView(t) {
     <nav class="daytabs" id="daytabs">${tabs.map(([k, l, sub]) =>
       `<button class="${S.tab === k ? 'on' : ''}" onclick="A.tab('${k}')">${l}${sub ? `<small>${sub}</small>` : ''}</button>`).join('')}</nav>
     ${body}
-    ${VIEW ? '' : packingView(t)}
+    ${packingView(t)}
   </div>
   ${VIEW ? '' : '<button class="fab" onclick="A.newItem()">＋ 일정</button>'}`;
 }
@@ -599,15 +599,45 @@ function itemCard(x, mode, d) {
     </div></div>`;
 }
 
+/* 준비물: 사람별로 나눠 기록 (p.w = 누구 것, 비어 있으면 공용). 체크는 내가, 공유 링크에서는 보기만 */
+const pkWho = p => String(p.w || '').trim();
+function pkPeople(t) {
+  const list = [];
+  (t.packing || []).forEach(p => { const w = pkWho(p); if (w && !list.includes(w)) list.push(w); });
+  ((S.pkExtra || {})[t.id] || []).forEach(w => { if (!list.includes(w)) list.push(w); });
+  return list;
+}
 function packingView(t) {
-  const pk = t.packing || [], done = pk.filter(p => p.d).length;
-  const have = new Set(pk.map(p => p.t));
-  return `<div class="box" id="packing"><h4>🧳 준비물 <small>${pk.length ? `${done} / ${pk.length} 챙김` : ''}</small></h4>
-    ${pk.length ? `<div class="bar"><i style="width:${pk.length ? done / pk.length * 100 : 0}%"></i></div>` : ''}
-    ${pk.map((p, i) => `<div class="pk ${p.d ? 'done' : ''}"><button class="cb" onclick="A.pk(${i})">${p.d ? '✓' : ''}</button>
-      <span onclick="A.pk(${i})">${esc(p.t)}</span><button class="x" onclick="A.pkDel(${i})">✕</button></div>`).join('')}
+  const pk = t.packing || [], done = pk.filter(p => p.d).length, ro = !!VIEW;
+  const people = pkPeople(t);
+  if (S.pkWho && !people.includes(S.pkWho)) S.pkWho = '';
+  const who = S.pkWho || '';
+  const groups = ['', ...people].map(w => ({ w, list: pk.map((p, i) => ({ p, i })).filter(o => pkWho(o.p) === w) }))
+    .filter(g => g.list.length || (!ro && g.w && g.w === who));
+  const multi = people.length > 0;
+  const row = ({ p, i }) => ro
+    ? `<div class="pk ro ${p.d ? 'done' : ''}"><span class="cb">${p.d ? '✓' : ''}</span><span>${esc(p.t)}</span></div>`
+    : `<div class="pk ${p.d ? 'done' : ''}"><button class="cb" onclick="A.pk(${i})">${p.d ? '✓' : ''}</button>
+      <span onclick="A.pk(${i})">${esc(p.t)}</span><button class="x" onclick="A.pkDel(${i})">✕</button></div>`;
+  const body = groups.map(g => {
+    const gd = g.list.filter(o => o.p.d).length;
+    return `<div class="pk-g">${multi ? `<div class="pk-gh"><span>${g.w ? '👤 ' + esc(g.w) : '🧺 공용'}</span><small>${g.list.length ? `${gd} / ${g.list.length}` : '아직 없음'}</small></div>` : ''}
+      ${g.list.map(row).join('')}</div>`;
+  }).join('');
+  const head = `<h4>🧳 준비물 <small>${pk.length ? `${done} / ${pk.length} 챙김` : ''}</small></h4>
+    ${pk.length ? `<div class="bar"><i style="width:${done / pk.length * 100}%"></i></div>` : ''}`;
+  if (ro) return pk.length ? `<div class="box" id="packing">${head}${body}</div>` : '';
+  const q = s => esc(s).replace(/'/g, '&#39;');
+  const have = new Set(pk.filter(p => pkWho(p) === who).map(p => p.t));
+  return `<div class="box" id="packing">${head}
+    <div class="chips pk-who" style="margin:4px 0 2px">
+      <button class="chip ${!who ? 'on' : ''}" onclick="A.pkWho('')">🧺 공용</button>
+      ${people.map(w => `<button class="chip ${who === w ? 'on' : ''}" onclick="A.pkWho('${q(w)}')">👤 ${esc(w)}</button>`).join('')}
+      <button class="chip" onclick="A.pkPerson()">＋ 사람</button></div>
+    ${who ? `<div class="hint" style="margin:0 0 4px">👤 ${esc(who)} 준비물에 추가돼요 · <button class="lnk" onclick="A.pkRename('${q(who)}')">이름 바꾸기·빼기</button></div>` : ''}
+    ${body}
     <form class="row" style="margin-top:10px" onsubmit="event.preventDefault();A.pkAdd()">
-      <input class="in" id="pk_in" placeholder="여권, 충전기, 우산 (쉼표로 여러 개)" enterkeyhint="done">
+      <input class="in" id="pk_in" placeholder="${who ? esc(who) + ' 준비물' : '여권, 충전기, 우산'} (쉼표로 여러 개)" enterkeyhint="done">
       <button class="btn pri" style="flex:none;padding:0 16px">추가</button></form>
     <div class="sug">${PACK_SUG.filter(s => !have.has(s)).map(s => `<button onclick="A.pkAdd('${s}')">＋ ${s}</button>`).join('')}</div>
     ${pk.length ? `<div style="margin-top:12px"><button class="lnk" onclick="A.pkReset()">체크 모두 해제</button><button class="lnk" onclick="A.pkClear()">목록 비우기</button></div>` : ''}
@@ -855,7 +885,13 @@ function printHtml(t) {
     if (tot) extra.push(`<div class="pd"><h2>💰 경비</h2><div class="p-cost">${Object.keys(by).map(c => `<span>${iconOf(c)} ${esc(c)} <b>${won(by[c])}</b></span>`).join('')}<span class="tot">합계 <b>${won(tot)}</b></span></div></div>`);
   }
   if (PR.memo && (t.memo || t.review)) extra.push(`<div class="pd"><h2>📝 메모 · 후기</h2>${t.memo ? `<div class="note">${esc(t.memo)}</div>` : ''}${t.review ? `<div class="note">${t.rating ? '★'.repeat(t.rating) + ' ' : ''}${esc(t.review)}</div>` : ''}</div>`);
-  if (PR.pack && (t.packing || []).length) extra.push(`<div class="pd"><h2>🧳 준비물</h2><div class="pk-p">${t.packing.map(p => `<span>${p.d ? '☑' : '☐'} ${esc(p.t)}</span>`).join('')}</div></div>`);
+  if (PR.pack && (t.packing || []).length) {
+    const ppl = ['', ...pkPeople(t)], multi = ppl.length > 1;
+    extra.push(`<div class="pd"><h2>🧳 준비물</h2>${ppl.map(w => {
+      const list = t.packing.filter(p => pkWho(p) === w);
+      return list.length ? `<div class="pk-p">${multi ? `<b>${w ? '👤 ' + esc(w) : '🧺 공용'}</b>` : ''}${list.map(p => `<span>${p.d ? '☑' : '☐'} ${esc(p.t)}</span>`).join('')}</div>` : '';
+    }).join('')}</div>`);
+  }
   return `<div class="ph1"><span class="em">${esc(t.emoji)}</span><div><h1>${esc(t.title)}</h1><div>${esc(dateLabel(t))} ${tagsOf(t).map(g => '#' + esc(g)).join(' ')}</div></div></div>
     <div class="p-body${PR.cols === 2 ? ' two' : ''}">${body || '<div class="p-m">출력할 일정이 없어요</div>'}${extra.join('')}</div>`;
 }
@@ -977,7 +1013,7 @@ const A = window.A = {
   dupTrip(id) {
     const t = tripOf(id); if (!t) return;
     const nt = normTrip({ ...t, id: newId(), title: t.title + ' (복사)', review: '', rating: 0, created_at: nowISO(),
-      packing: (t.packing || []).map(p => ({ t: p.t, d: false })) });
+      packing: (t.packing || []).map(p => (pkWho(p) ? { t: p.t, d: false, w: pkWho(p) } : { t: p.t, d: false })) });
     putTrip(nt);
     itemsOf(id).forEach(x => putItem(normItem({ ...x, id: newId(), trip_id: nt.id, created_at: nowISO() })));
     toast('복제했어요 · 준비물 체크와 후기는 비워졌어요', 3500);
@@ -1001,14 +1037,38 @@ const A = window.A = {
   pkAdd(v) {
     const t = tripOf(S.tripId), inp = $('#pk_in');
     const list = String(v != null ? v : inp.value).split(',').map(s => s.trim()).filter(Boolean);
-    const have = new Set(t.packing.map(p => p.t));
-    list.forEach(s => { if (!have.has(s)) { t.packing.push({ t: s, d: false }); have.add(s); } });
+    const who = S.pkWho || '';
+    const have = new Set(t.packing.filter(p => pkWho(p) === who).map(p => p.t)); // 같은 물건도 사람마다 따로
+    list.forEach(s => { if (!have.has(s)) { t.packing.push(who ? { t: s, d: false, w: who } : { t: s, d: false }); have.add(s); } });
     if (!list.length) return;
     putTrip(t); A._pkRender();
     if (v == null) { const n = $('#pk_in'); n.value = ''; if (!isMobile) n.focus(); }
   },
   pkReset() { const t = tripOf(S.tripId); t.packing.forEach(p => p.d = false); putTrip(t); A._pkRender(); },
   pkClear() { if (!confirm('준비물 목록을 모두 지울까요?')) return; const t = tripOf(S.tripId); t.packing = []; putTrip(t); A._pkRender(); },
+  pkWho(w) { S.pkWho = w; A._pkRender(); },
+  pkPerson() {
+    const t = tripOf(S.tripId); if (!t) return;
+    const n = (prompt('누구 준비물인가요? (이름)') || '').trim().replace(/[,]/g, ' ');
+    if (!n) return;
+    S.pkExtra = S.pkExtra || {}; const ex = S.pkExtra[t.id] = S.pkExtra[t.id] || [];
+    if (!pkPeople(t).includes(n)) ex.push(n);
+    S.pkWho = n; A._pkRender();
+    if (!isMobile) { const f = $('#pk_in'); if (f) f.focus(); }
+  },
+  pkRename(old) {
+    const t = tripOf(S.tripId); if (!t) return;
+    const v = prompt(`'${old}' 이름 바꾸기\n비워두고 확인하면 이 사람 준비물을 공용으로 옮겨요`, old);
+    if (v === null) return;
+    const n = v.trim().replace(/[,]/g, ' ');
+    if (n === old) return;
+    t.packing.forEach(p => { if (pkWho(p) === old) { if (n) p.w = n; else delete p.w; } });
+    S.pkExtra = S.pkExtra || {};
+    const ex = (S.pkExtra[t.id] || []).filter(w => w !== old);
+    if (n && !t.packing.some(p => pkWho(p) === n) && !ex.includes(n)) ex.push(n); // 아직 물건이 없는 사람이면 칩 유지
+    S.pkExtra[t.id] = ex;
+    S.pkWho = n; putTrip(t); A._pkRender();
+  },
   _pkRender() { const box = $('#packing'), t = tripOf(S.tripId); if (box && t) box.outerHTML = packingView(t); },
 
   /* 일정 */
@@ -1136,7 +1196,7 @@ const A = window.A = {
       <label class="f">함께 보여줄 항목</label>
       ${chk('cost', '💰 경비', '일정별 비용과 경비 정리')}
       ${chk('memo', '📝 메모', '여행 메모와 일정 메모 (예약 번호 등이 있으면 주의)')}
-      <div class="hint">일정·숙소·지도 길찾기·링크·사진은 항상 보여요. 준비물, 별점, 후기는 항상 숨겨요.</div>
+      <div class="hint">일정·숙소·지도 길찾기·링크·사진·준비물(사람별 체크 상태)은 항상 보여요. 별점, 후기는 항상 숨겨요.</div>
       <div class="btns" style="flex-direction:column">
         ${sh ? `<button class="btn pri" onclick="A.shareSave('${t.id}')">보여줄 항목 저장</button>
           <button class="btn" onclick="A.shareSave('${t.id}',true)">🔄 새 링크로 바꾸기 <small style="font-weight:600;color:var(--sub)">(지금 링크는 막혀요)</small></button>
@@ -1210,7 +1270,7 @@ function routeFromHash() {
   if (VIEW) return; // 공유 링크는 그 여행 하나만
   const m = location.hash.match(/^#\/trip\/([\w-]+)/);
   const id = m ? m[1] : null;
-  if (id !== S.tripId) { S.tripId = id; S.tab = 'all'; window.scrollTo(0, 0); }
+  if (id !== S.tripId) { S.tripId = id; S.tab = 'all'; S.pkWho = ''; window.scrollTo(0, 0); }
 }
 
 window.addEventListener('hashchange', () => { closeSheet(); A.lbClose(); A.pvClose(); routeFromHash(); render(); });
