@@ -52,7 +52,11 @@ const LS = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { } }
 };
 
-function saveCache() { if (S.user) LS.set('tl:data', { uid: S.user.id, trips: S.trips, items: S.items, at: Date.now() }); }
+/* 보기 전용 공유 링크(?share=…)로 열었을 때: 그 여행 1건만, 읽기만 */
+const SHARE_TOKEN = (new URLSearchParams(location.search).get('share') || '').replace(/[^0-9a-f]/gi, '');
+const VIEW = SHARE_TOKEN ? { token: SHARE_TOKEN, opt: { cost: false, memo: false }, err: '' } : null;
+
+function saveCache() { if (VIEW) return; if (S.user) LS.set('tl:data', { uid: S.user.id, trips: S.trips, items: S.items, at: Date.now() }); }
 function loadCache(uid) {
   const c = LS.get('tl:data', null);
   if (c && c.uid === uid) { S.trips = c.trips || []; S.items = c.items || []; return true; }
@@ -138,6 +142,7 @@ let flushing = false, flushTimer = 0;
 const saveOB = () => LS.set('tl:outbox', OB);
 
 function queue(op) {
+  if (VIEW) return; // 보기 전용: 아무것도 저장하지 않음
   if (op.op === 'up') {
     const i = OB.findIndex(o => o.t === op.t && o.op === 'up' && o.row.id === op.row.id);
     if (i >= 0) { OB[i] = op; saveOB(); flushSoon(); return; }
@@ -147,6 +152,7 @@ function queue(op) {
 function flushSoon(ms = 700) { clearTimeout(flushTimer); flushTimer = setTimeout(flush, ms); renderSync(); }
 
 async function flush() {
+  if (VIEW) return;
   if (flushing || !S.user || !navigator.onLine || !OB.length) { renderSync(); return; }
   flushing = true; renderSync();
   const ops = OB.slice();
@@ -168,7 +174,33 @@ async function flush() {
   }
 }
 
+/* 공유 링크로 받은 여행 1건 불러오기 (비밀번호 없이, 받은 사람 기기에만 저장본 보관) */
+const viewCacheKey = () => 'tl:sv:' + VIEW.token;
+function applyShared(r) {
+  S.trips = [fromSheetTrip(r.trip)];
+  S.items = (r.items || []).filter(x => x.id).map(fromSheetItem);
+  S.tripId = S.trips[0].id; VIEW.opt = r.opt || { cost: false, memo: false }; VIEW.err = '';
+  document.title = (S.trips[0].title || '여행') + ' · 여행 기록장';
+}
+async function pullShared(force) {
+  if (S.pulling || !navigator.onLine) return;
+  if (!force && Date.now() - S.lastPull < 15000) return;
+  S.pulling = true; renderSync();
+  try {
+    const r = await api('share', { token: VIEW.token }, '');
+    applyShared(r); LS.set(viewCacheKey(), r);
+    S.lastPull = Date.now(); render();
+  } catch (e) {
+    if (e.message === 'share') { // 공유 중지됐거나 주소가 바뀜 → 남아 있던 저장본도 지움
+      try { localStorage.removeItem(viewCacheKey()); } catch (x) { }
+      S.trips = []; S.items = []; S.tripId = null; VIEW.err = 'stopped'; render();
+    } else if (!S.trips.length) { VIEW.err = e.net ? 'offline' : e.message; render(); }
+    else if (!e.net) toast('불러오기 실패: ' + e.message, 5000);
+  } finally { S.pulling = false; renderSync(); }
+}
+
 async function pull(force) {
+  if (VIEW) return pullShared(force);
   if (!S.user || S.pulling || !navigator.onLine) return;
   if (!force && Date.now() - S.lastPull < 15000) return;
   S.pulling = true; renderSync();
@@ -354,6 +386,11 @@ function linksOf(x) {
 function render() {
   const app = $('#app');
   if (!configured) { app.innerHTML = setupView(); return; }
+  if (VIEW) {
+    const vt = S.tripId && tripOf(S.tripId);
+    app.innerHTML = vt ? tripView(vt) : viewMsg();
+    renderSync(); return;
+  }
   if (!S.user) { app.innerHTML = loginView(); return; }
   const t = S.tripId && tripOf(S.tripId);
   if (S.tripId && !t) { S.tripId = null; if (location.hash) history.replaceState(null, '', location.pathname); }
@@ -365,6 +402,11 @@ function render() {
 function renderSync() {
   const el = $('#sync'); if (!el) return;
   let s, off = false;
+  if (VIEW) {
+    off = !navigator.onLine;
+    s = '👀 보기 전용 · ' + (off ? '오프라인 · 저장된 내용 보는 중' : S.pulling ? '최신 내용 확인 중…' : S.lastPull ? '최신 내용' : '');
+    el.textContent = s; el.classList.toggle('off', off); return;
+  }
   if (!navigator.onLine) { off = true; s = '오프라인' + (OB.length ? ` · 변경 ${OB.length}건 대기 중` : ' · 저장된 내용 보는 중'); }
   else if (flushing || S.pulling) s = '동기화 중…';
   else if (OB.length) s = `변경 ${OB.length}건 보내는 중…`;
@@ -375,6 +417,14 @@ function renderSync() {
 function setupView() {
   return `<div class="login"><div class="logo">🧳</div><h1>여행 기록장</h1>
     <p>처음 설정이 필요해요.<br><b>config.js</b> 파일에 Apps Script 웹 앱 주소를 넣어주세요.<br>(README 2단계)</p></div>`;
+}
+function viewMsg() {
+  const m = !VIEW.err ? ['⏳', '여행을 불러오는 중이에요…']
+    : VIEW.err === 'stopped' ? ['🔒', '공유가 중지되었거나 주소가 바뀐 링크예요.<br>공유해준 분께 새 링크를 받아주세요.']
+      : VIEW.err === 'offline' ? ['📶', '인터넷에 연결되면 여행 일정을 볼 수 있어요.']
+        : ['⚠️', esc(VIEW.err)];
+  return `<div class="login"><div class="logo">${m[0]}</div><h1>여행 기록장</h1><p>${m[1]}</p>
+    ${VIEW.err && VIEW.err !== 'stopped' ? '<button class="btn" style="width:100%" onclick="A.refresh()">다시 시도</button>' : ''}</div>`;
 }
 function loginView() {
   return `<div class="login"><div class="logo">🧳</div><h1>여행 기록장</h1><p>Apps Script에 정한 비밀번호를 입력해주세요<br><small>기기마다 처음 한 번만 입력해요</small></p>
@@ -455,7 +505,7 @@ function tripView(t) {
   const undated = its.filter(x => !days.includes(x.date));
   const tabs = [['all', '전체', '']].concat(days.map((d, i) => [d, `${i + 1}일차`, md(d)]));
   if (undated.length) tabs.push(['none', '날짜 미정', '']);
-  tabs.push(['log', '📝 기록', '']);
+  tabs.push(['log', VIEW ? (VIEW.opt.cost ? '📷 사진·경비' : '📷 사진') : '📝 기록', '']);
   if (!tabs.some(x => x[0] === S.tab)) S.tab = 'all';
   const total = its.reduce((s, x) => s + costNum(x.cost), 0);
   let body;
@@ -465,9 +515,13 @@ function tripView(t) {
   else body = days.map((d, i) => dayBlock(t, d, i, days.length)).join('') + (undated.length || !days.length ? dayBlock(t, '', -1, days.length) : '');
   const st = ddayOf(t) || (isPast(t) ? '다녀옴' : '');
 
+  const hideCost = VIEW && !VIEW.opt.cost;
+  const acts = VIEW ? `<button onclick="A.print('${t.id}')">🖨 출력 · 저장</button>`
+    : `<button onclick="A.editTrip('${t.id}')">✏️ 편집</button><button onclick="A.share('${t.id}')">🔗 공유</button><button onclick="A.dupTrip('${t.id}')">📑 복제</button>
+        <button onclick="A.print('${t.id}')">🖨 출력</button><button onclick="A.delTrip('${t.id}')">🗑 삭제</button>`;
   return `<div class="wrap">
-    <button class="back" onclick="A.home()">‹ 여행 목록</button>
-    <div class="sync" id="sync" style="margin-top:-30px"></div>
+    ${VIEW ? '<div class="sync" id="sync" style="margin:14px 0 8px"></div>'
+      : '<button class="back" onclick="A.home()">‹ 여행 목록</button><div class="sync" id="sync" style="margin-top:-30px"></div>'}
     <div class="hero c-${t.color}">
       <div class="em">${esc(t.emoji)}</div><h2>${esc(t.title || '제목 없는 여행')}</h2>
       <div class="dt">${esc(dateLabel(t))}</div>
@@ -475,16 +529,15 @@ function tripView(t) {
       ${t.memo ? `<div class="memo">${esc(t.memo)}</div>` : ''}
       <div class="hstats"><div><b>${its.length}</b><span>전체 일정</span></div>
         <div><b>${its.filter(x => x.category === '갈곳' || x.category === '체험').length}</b><span>갈 곳 · 체험</span></div>
-        <div><b>${total ? won(total) : '-'}</b><span>경비</span></div></div>
-      <div class="acts"><button onclick="A.editTrip('${t.id}')">✏️ 편집</button><button onclick="A.dupTrip('${t.id}')">📑 복제</button>
-        <button onclick="A.print('${t.id}')">🖨 출력</button><button onclick="A.delTrip('${t.id}')">🗑 삭제</button></div>
+        ${hideCost ? `<div><b>${days.length}일</b><span>여행 일수</span></div>` : `<div><b>${total ? won(total) : '-'}</b><span>경비</span></div>`}</div>
+      <div class="acts">${acts}</div>
     </div>
     <nav class="daytabs" id="daytabs">${tabs.map(([k, l, sub]) =>
       `<button class="${S.tab === k ? 'on' : ''}" onclick="A.tab('${k}')">${l}${sub ? `<small>${sub}</small>` : ''}</button>`).join('')}</nav>
     ${body}
-    ${packingView(t)}
+    ${VIEW ? '' : packingView(t)}
   </div>
-  <button class="fab" onclick="A.newItem()">＋ 일정</button>`;
+  ${VIEW ? '' : '<button class="fab" onclick="A.newItem()">＋ 일정</button>'}`;
 }
 
 function dayBlock(t, d, i, total) {
@@ -504,9 +557,9 @@ function dayBlock(t, d, i, total) {
       ${outs.map(x => itemCard(x, 'out')).join('')}
       ${main.map(x => itemCard(x)).join('')}
       ${mids.map(x => itemCard(x, 'mid', d)).join('')}
-      ${!outs.length && !main.length && !mids.length ? '<div class="tl-empty">아직 일정이 없어요. 아래에서 바로 추가해보세요.</div>' : ''}
+      ${!outs.length && !main.length && !mids.length ? `<div class="tl-empty">${VIEW ? '이 날은 일정이 없어요.' : '아직 일정이 없어요. 아래에서 바로 추가해보세요.'}</div>` : ''}
     </div>
-    <div class="quick">${CATS.map(([c, ic]) => `<button style="--c:${CCOL[c]}" onclick="A.newItem('${d}','${c}')">＋ ${ic} ${c}</button>`).join('')}</div>
+    ${VIEW ? '' : `<div class="quick">${CATS.map(([c, ic]) => `<button style="--c:${CCOL[c]}" onclick="A.newItem('${d}','${c}')">＋ ${ic} ${c}</button>`).join('')}</div>`}
   </section>`;
 }
 
@@ -590,6 +643,11 @@ function logView(t) {
         </details>`).join('')}
       <div class="ctotal"><span>합계</span><b>${won(total)}</b></div>`
     : '<div class="sm">비용이 입력된 일정이 없어요. 일정을 눌러 비용을 넣으면 자동으로 정리돼요.</div>';
+  if (VIEW) return `${VIEW.opt.cost ? `<div class="box"><h4>💰 경비 정리 ${total ? `<small>${spent.length}건</small>` : ''}</h4>${costBox}</div>` : ''}
+    ${t.memo ? `<div class="box"><h4>📝 여행 메모</h4><div class="sm" style="font-size:14px">${esc(t.memo)}</div></div>` : ''}
+    <div class="box"><h4>📷 사진 <small>${photos.length}장</small></h4>
+      ${photos.length ? `<div class="gallery">${photos.map(o => `<button onclick="A.lightbox('${o.id}',${o.k})">${imgTag(o.p)}</button>`).join('')}</div>`
+      : '<div class="sm">아직 올라온 사진이 없어요</div>'}</div>`;
   return `<div class="box"><h4>⭐ 여행 별점</h4>
       <div class="stars">${[1, 2, 3, 4, 5].map(n => `<button class="${t.rating >= n ? 'on' : ''}" onclick="A.rate(${n})">★</button>`).join('')}</div>
       <label class="f">여행 후기</label>
@@ -963,6 +1021,7 @@ const A = window.A = {
     if (!isMobile) setTimeout(() => $('#i_title') && $('#i_title').focus(), 250);
   },
   editItem(id) {
+    if (VIEW) return; // 보기 전용
     const x = S.items.find(v => v.id === id); if (!x) return;
     E = normItem(JSON.parse(JSON.stringify(x)));
     E._new = []; E._removed = []; E._orig = x;
@@ -1042,6 +1101,79 @@ const A = window.A = {
     } catch (e) { if (e && e.name !== 'AbortError') toast('이미지를 만들지 못했어요: ' + (e.message || e)); }
   },
 
+  /* 보기 전용 공유 (여행 1건) */
+  async share(id) {
+    const t = tripOf(id); if (!t) return;
+    if (!navigator.onLine) { toast('공유 링크는 인터넷이 연결됐을 때 만들 수 있어요'); return; }
+    openSheet(`<h3>🔗 보기 전용 공유</h3><div class="sm" style="color:var(--sub)">확인 중…</div>`, 'share');
+    try {
+      await flush(); // 방금 고친 내용이 시트에 먼저 들어가도록
+      const r = await api('shareList');
+      A._shareSheet(t, (r.shares || []).find(s => s.tripId === id) || null);
+    } catch (e) { A._shareErr(e); }
+  },
+  _shareErr(e) {
+    const old = /알 수 없는 요청/.test(e.message || '');
+    if (SHEET && SHEET.kind === 'share') $('#sheet').innerHTML = `<div class="grip"></div><h3>🔗 보기 전용 공유</h3>
+      <div class="hint err" style="font-size:14px">${old ? 'Apps Script에 공유 기능이 아직 없어요.<br>Share.gs를 추가하고 새 버전으로 배포해주세요. (README-공유 참고)' : esc(e.message)}</div>
+      <div class="btns"><button class="btn" onclick="A.close()">닫기</button></div>`;
+    else toast(old ? 'Apps Script에 공유 기능을 먼저 추가해주세요' : e.message, 5000);
+  },
+  _shareUrl: token => location.origin + location.pathname + '?share=' + token,
+  _shareSheet(t, sh) {
+    const url = sh ? A._shareUrl(sh.token) : '';
+    const opt = sh || { cost: false, memo: false };
+    const chk = (k, label, sub) => `<label class="row" style="align-items:flex-start;gap:10px;margin:10px 0;cursor:pointer">
+      <input type="checkbox" id="sh_${k}" ${opt[k] ? 'checked' : ''} style="width:20px;height:20px;flex:none;margin-top:1px">
+      <span><b style="font-size:14.5px">${label}</b><br><small style="color:var(--sub)">${sub}</small></span></label>`;
+    $('#sheet').innerHTML = `<div class="grip"></div><h3>🔗 보기 전용 공유</h3>
+      <div class="sm" style="margin-bottom:6px"><b>${esc(t.emoji)} ${esc(t.title || '제목 없는 여행')}</b> 1건만 보여주는 링크예요.
+        다른 여행은 보이지 않고, 받은 사람은 고칠 수 없어요. 내가 수정하면 상대방 화면에도 반영돼요.</div>
+      ${sh ? `<label class="f">공유 링크</label>
+        <div class="row"><input class="in" id="sh_url" value="${esc(url)}" readonly onclick="this.select()">
+          <button class="btn pri" style="flex:none;padding:0 16px" onclick="A.shareCopy()">복사</button></div>
+        ${isMobile && navigator.share ? `<button class="btn" style="width:100%;margin-top:8px" onclick="A.shareSend()">📤 카톡·문자로 보내기</button>` : ''}` : ''}
+      <label class="f">함께 보여줄 항목</label>
+      ${chk('cost', '💰 경비', '일정별 비용과 경비 정리')}
+      ${chk('memo', '📝 메모', '여행 메모와 일정 메모 (예약 번호 등이 있으면 주의)')}
+      <div class="hint">일정·숙소·지도 길찾기·링크·사진은 항상 보여요. 준비물, 별점, 후기는 항상 숨겨요.</div>
+      <div class="btns" style="flex-direction:column">
+        ${sh ? `<button class="btn pri" onclick="A.shareSave('${t.id}')">보여줄 항목 저장</button>
+          <button class="btn" onclick="A.shareSave('${t.id}',true)">🔄 새 링크로 바꾸기 <small style="font-weight:600;color:var(--sub)">(지금 링크는 막혀요)</small></button>
+          <button class="btn" style="color:var(--warn)" onclick="A.shareStop('${t.id}')">공유 중지</button>`
+        : `<button class="btn pri" onclick="A.shareSave('${t.id}')">공유 링크 만들기</button>`}
+        <button class="btn" onclick="A.close()">닫기</button>
+      </div>`;
+  },
+  async shareSave(id, renew) {
+    const t = tripOf(id); if (!t) return;
+    if (renew && !confirm('새 링크로 바꾸면 지금 링크로는 더 이상 볼 수 없어요. 바꿀까요?')) return;
+    const cost = $('#sh_cost').checked, memo = $('#sh_memo').checked;
+    toast('저장 중…', 10000);
+    try {
+      await flush();
+      const r = await api('shareSet', { tripId: id, cost, memo, renew: !!renew });
+      A._shareSheet(t, r);
+      toast(renew ? '새 링크로 바꿨어요' : '저장했어요 · 링크를 복사해서 보내주세요', 3500);
+    } catch (e) { A._shareErr(e); }
+  },
+  async shareStop(id) {
+    if (!confirm('공유를 중지할까요? 보낸 링크로는 더 이상 볼 수 없어요.')) return;
+    try { await api('shareStop', { tripId: id }); A._shareSheet(tripOf(id), null); toast('공유를 중지했어요'); }
+    catch (e) { A._shareErr(e); }
+  },
+  async shareCopy() {
+    const f = $('#sh_url'); if (!f) return;
+    try { await navigator.clipboard.writeText(f.value); }
+    catch (e) { f.select(); document.execCommand('copy'); }
+    toast('링크를 복사했어요');
+  },
+  async shareSend() {
+    const f = $('#sh_url'), t = tripOf(S.tripId); if (!f) return;
+    try { await navigator.share({ title: (t && t.title) || '여행 일정', text: `${(t && t.title) || '여행'} 일정이에요`, url: f.value }); }
+    catch (e) { if (e && e.name !== 'AbortError') A.shareCopy(); }
+  },
+
   /* 설정 */
   settings() {
     const noGeo = S.items.filter(x => x.place && !(x.geo && x.geo.to)).length;
@@ -1075,6 +1207,7 @@ window.toast = toast;
 
 /* ───────── 시작 ───────── */
 function routeFromHash() {
+  if (VIEW) return; // 공유 링크는 그 여행 하나만
   const m = location.hash.match(/^#\/trip\/([\w-]+)/);
   const id = m ? m[1] : null;
   if (id !== S.tripId) { S.tripId = id; S.tab = 'all'; window.scrollTo(0, 0); }
@@ -1117,6 +1250,12 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.se
 
 (function start() {
   if (!configured) { render(); return; }
+  if (VIEW) {
+    const c = LS.get(viewCacheKey(), null);
+    if (c && c.trip) applyShared(c);
+    render(); pullShared(true);
+    return;
+  }
   if (getKey()) {
     S.user = { id: API_URL };
     loadCache(S.user.id);
