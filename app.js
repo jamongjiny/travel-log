@@ -17,7 +17,43 @@ const ICON = Object.fromEntries(CATS);
 const iconOf = c => ICON[c] || '📌'; // 예전에 쓰던 다른 분류도 그대로 표시
 const CCOL = { 이동: '#4C7BD9', 숙소: '#7C5CDB', 식사: '#E8742E', 갈곳: '#2F9E6E', 체험: '#D69E00', 쇼핑: '#D6336C', 기타: '#868E96' };
 const won = n => '₩' + Math.round(+n || 0).toLocaleString('ko-KR');
-const COLORS = { ocean: '#C4DDF0', sunset: '#F8CDB8', forest: '#C7E2CC', lavender: '#D6CCEF', rose: '#F1C8D2', sand: '#E9DBB8', night: '#1D2433' };
+const COLORS = {
+  ocean: ['바다', 'p', '#DCEBF5', '#C4DDF0'],
+  sky: ['하늘', 'p', '#E4F2FD', '#CBE5FA'],
+  aqua: ['아쿠아', 'p', '#DDF4F3', '#C2EAE8'],
+  mint: ['민트', 'p', '#DDF5EA', '#C3EBD7'],
+  forest: ['숲', 'p', '#DDEEDD', '#C7E2CC'],
+  sage: ['세이지', 'p', '#E7EDDF', '#D3DFC6'],
+  lemon: ['레몬', 'p', '#FBF6D8', '#F5EAA8'],
+  butter: ['버터', 'p', '#FBF0DA', '#F4DFAF'],
+  sand: ['모래', 'p', '#F3EAD3', '#E9DBB8'],
+  apricot: ['살구', 'p', '#FDE9DD', '#F9D3BD'],
+  sunset: ['노을', 'p', '#FCE3D2', '#F8CDB8'],
+  coral: ['코랄', 'p', '#FDE1DC', '#F8C5BD'],
+  rose: ['장미', 'p', '#F8DFE4', '#F1C8D2'],
+  blush: ['블러시', 'p', '#FBE5EF', '#F4CCDF'],
+  lavender: ['라벤더', 'p', '#E7E1F5', '#D6CCEF'],
+  lilac: ['라일락', 'p', '#F0E3F7', '#E1CBEF'],
+  periwinkle: ['페리윙클', 'p', '#E4E7FA', '#CDD3F4'],
+  cloud: ['구름', 'p', '#EFF1F4', '#DDE2E8'],
+  dawn: ['새벽', 'g', '#FDE2E4', '#D7E3FC'],
+  cotton: ['솜사탕', 'g', '#FBD5EA', '#D9D4F7'],
+  peach: ['복숭아', 'g', '#FFE6D2', '#FBD1E1'],
+  citrus: ['시트러스', 'g', '#FFF3C6', '#FFD9C4'],
+  meadow: ['초원', 'g', '#E8F5D2', '#CDEFE3'],
+  lagoon: ['라군', 'g', '#D2F1EC', '#D7E4FB'],
+  aurora: ['오로라', 'g', '#D9F2EE', '#E8DAF6'],
+  dusk: ['땅거미', 'g', '#E5DEF6', '#F6D6E3'],
+  night: ['밤하늘', 'd', '#2B3448', '#1D2433'],
+  navy: ['네이비', 'd', '#24406A', '#172B48'],
+  pine: ['깊은 숲', 'd', '#24564A', '#163A31'],
+  plum: ['자두', 'd', '#58355E', '#3A2240'],
+  cocoa: ['코코아', 'd', '#5A4636', '#3B2D23']
+}; // 이름, 묶음(p 파스텔 · g 그라데이션 · d 진한색), 색1, 색2
+const COLOR_GROUPS = [['p', '파스텔'], ['g', '파스텔 그라데이션'], ['d', '진한 색']];
+const covBg = k => { const c = COLORS[k] || COLORS.ocean; return `linear-gradient(135deg,${c[2]},${c[3]})`; };
+const covCls = k => `c-${COLORS[k] ? k : 'ocean'}${(COLORS[k] || COLORS.ocean)[1] === 'd' ? ' c-dark' : ''}`;
+(function () { const st = document.createElement('style'); st.textContent = Object.keys(COLORS).map(k => `.c-${k}{background:${covBg(k)}}`).join('\n'); document.head.appendChild(st); })();
 const EMOJIS = ['✈️', '🏖️', '⛰️', '🚗', '🏯', '🌸', '🍜', '📚', '♨️', '🎡', '🌊', '🏕️', '🍁', '❄️'];
 const PACK_SUG = ['신분증', '충전기', '보조배터리', '상비약', '세면도구', '선크림', '우산', '잠옷', '책', '여권', '유심 / eSIM', '카메라', '차 키'];
 const WD = '일월화수목금토';
@@ -440,7 +476,7 @@ function card(t) {
   const dd = ddayOf(t);
   const meta = [its.length ? `일정 ${its.length}` : '', pk.length && !isPast(t) ? `준비물 ${pk.filter(p => p.d).length}/${pk.length}` : '',
     t.rating ? '★'.repeat(t.rating) : ''].filter(Boolean).join(' · ');
-  return `<button class="trip c-${t.color}" onclick="A.open('${t.id}')">
+  return `<button class="trip ${covCls(t.color)}" onclick="A.open('${t.id}')">
     ${dd ? `<span class="dd">${dd}</span>` : ''}
     <div class="em">${esc(t.emoji)}</div><h3>${esc(t.title || '제목 없는 여행')}</h3>
     <div class="dt">${esc(dateLabel(t))}</div>
@@ -525,7 +561,7 @@ function tripView(t) {
   return `<div class="wrap">
     ${VIEW ? '<div class="sync" id="sync" style="margin:14px 0 8px"></div>'
       : '<button class="back" onclick="A.home()">‹ 여행 목록</button><div class="sync" id="sync" style="margin-top:-30px"></div>'}
-    <div class="hero c-${t.color}">
+    <div class="hero ${covCls(t.color)}">
       <div class="em">${esc(t.emoji)}</div><h2>${esc(t.title || '제목 없는 여행')}</h2>
       <div class="dt">${esc(dateLabel(t))}</div>
       <div style="margin-top:6px">${st ? `<span class="tag st">${st}</span>` : ''}${tagsOf(t).map(g => `<span class="tag">#${esc(g)}</span>`).join('')}</div>
@@ -739,8 +775,8 @@ function tripSheet(t) {
     <label class="f">여행 이름</label><input class="in" id="t_title" value="${esc(t.title)}" placeholder="예) 부산 2박 3일">
     <label class="f">아이콘</label><div class="row emojis" style="flex-wrap:wrap;gap:6px">${EMOJIS.map(e =>
       `<button type="button" class="${t.emoji === e ? 'on' : ''}" style="flex:none" onclick="A.pickOne(this)" data-v="${e}">${e}</button>`).join('')}</div>
-    <label class="f">색상</label><div class="row colors" style="gap:8px">${Object.entries(COLORS).map(([k, c]) =>
-      `<button type="button" class="${t.color === k ? 'on' : ''}" style="flex:none;background:${c}" onclick="A.pickOne(this)" data-v="${k}"></button>`).join('')}</div>
+    <label class="f">커버 색상</label><div class="colors">${COLOR_GROUPS.map(([g, gl]) => `<div class="cg-l">${gl}</div><div class="cg">${Object.keys(COLORS).filter(k => COLORS[k][1] === g).map(k =>
+      `<button type="button" class="${t.color === k ? 'on' : ''}" style="background:${covBg(k)}" title="${COLORS[k][0]}" aria-label="${COLORS[k][0]}" onclick="A.pickColor(this)" data-v="${k}"></button>`).join('')}</div>`).join('')}</div>
     <label class="f">테마·지역 태그 (쉼표로 구분)</label><input class="in" id="t_tags" value="${esc(t.tags)}" placeholder="부산, 바다, 맛집">
     ${allTags().length ? `<div class="sug">${allTags().map(g => `<button type="button" onclick="A.addTag('${esc(g).replace(/'/g, '&#39;')}')">#${esc(g)}</button>`).join('')}</div>` : ''}
     <div class="row"><div>${dateField('t_s', '출발일', t.start_date, 't_e')}</div><div>${dateField('t_e', '돌아오는 날', t.end_date)}</div></div>
@@ -988,6 +1024,7 @@ const A = window.A = {
 
   /* 여행 */
   editTrip(id) { tripSheet(id ? tripOf(id) : null); },
+  pickColor(b) { $$('.colors button').forEach(x => x.classList.toggle('on', x === b)); },
   pickOne(b) { $$('button', b.parentNode).forEach(x => x.classList.toggle('on', x === b)); },
   dateIn(el, next) {
     let v = el.value.replace(/\D/g, '').slice(0, 8);

@@ -56,10 +56,8 @@ a{color:inherit}
 .trip .dt{font-size:13.5px;opacity:.8;margin-bottom:8px}
 .trip .dd{position:absolute;top:14px;right:14px;font-size:12.5px;font-weight:800;padding:4px 10px;border-radius:999px;background:rgba(255,255,255,.7)}
 .trip .meta{font-size:12.5px;opacity:.75}
-.c-ocean{background:linear-gradient(135deg,#DCEBF5,#C4DDF0)} .c-sunset{background:linear-gradient(135deg,#FCE3D2,#F8CDB8)}
-.c-forest{background:linear-gradient(135deg,#DDEEDD,#C7E2CC)} .c-lavender{background:linear-gradient(135deg,#E7E1F5,#D6CCEF)}
-.c-rose{background:linear-gradient(135deg,#F8DFE4,#F1C8D2)} .c-sand{background:linear-gradient(135deg,#F3EAD3,#E9DBB8)}
-.c-night{background:linear-gradient(135deg,#2B3448,#1D2433);color:#fff} .c-night .tag,.c-night .dd{background:rgba(255,255,255,.15)}
+/* 커버 색 배경은 app.js 의 COLORS 에서 만들어요 */
+.c-dark{color:#fff} .c-dark .tag,.c-dark .dd{background:rgba(255,255,255,.15)}
 .empty{text-align:center;color:var(--sub);padding:50px 10px}
 .empty .big{font-size:44px}
 
@@ -70,7 +68,7 @@ a{color:inherit}
 .hero .dt{font-size:14px;opacity:.85}
 .hero .acts{display:flex;gap:6px;margin-top:12px;flex-wrap:wrap}
 .hero .acts button{padding:7px 12px;border-radius:11px;background:rgba(255,255,255,.65);font-size:13px;font-weight:700}
-.c-night .acts button{background:rgba(255,255,255,.14)}
+.c-dark .acts button{background:rgba(255,255,255,.14);color:#fff}
 .hero .memo{margin-top:10px;font-size:13.5px;white-space:pre-wrap;opacity:.85}
 
 .day{margin-bottom:18px}
@@ -153,8 +151,11 @@ textarea.in{min-height:76px;resize:vertical}
 .cats button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
 .emojis button{font-size:22px;width:42px;height:42px;border-radius:12px;background:var(--card);border:1px solid var(--line)}
 .emojis button.on{border:2px solid var(--ink)}
-.colors button{width:38px;height:38px;border-radius:12px;border:2px solid transparent}
-.colors button.on{border-color:var(--ink)}
+.colors .cg{display:flex;flex-wrap:wrap;gap:8px}
+.colors .cg-l{font-size:11.5px;font-weight:700;color:var(--sub);margin:8px 0 5px}
+.colors .cg-l:first-child{margin-top:0}
+.colors button{width:38px;height:38px;border-radius:12px;border:2px solid transparent;box-shadow:inset 0 0 0 1px rgba(0,0,0,.06)}
+.colors button.on{border-color:var(--ink);box-shadow:inset 0 0 0 2px #fff}
 .btns{display:flex;gap:8px;margin-top:20px}
 .btn{flex:1;padding:14px;border-radius:15px;font-weight:800;background:var(--card);border:1px solid var(--line)}
 .btn.pri{background:var(--ink);color:#fff;border-color:var(--ink)}
@@ -234,7 +235,7 @@ textarea.in{min-height:76px;resize:vertical}
 .hstats div{background:rgba(255,255,255,.55);border-radius:13px;padding:8px 6px;text-align:center}
 .hstats b{display:block;font-size:16px;font-weight:800;letter-spacing:-.02em}
 .hstats span{font-size:11.5px;opacity:.75}
-.c-night .hstats div{background:rgba(255,255,255,.12)}
+.c-dark .hstats div{background:rgba(255,255,255,.12)}
 .hstats.home{grid-template-columns:repeat(4,1fr);margin:-4px 0 14px}
 .hstats.home div{background:var(--card);box-shadow:var(--sh)}
 .tag.st{background:var(--ink);color:#fff}
