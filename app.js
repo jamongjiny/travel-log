@@ -505,11 +505,14 @@ function tripView(t) {
   const undated = its.filter(x => !days.includes(x.date));
   const tabs = [['all', '전체', '']].concat(days.map((d, i) => [d, `${i + 1}일차`, md(d)]));
   if (undated.length) tabs.push(['none', '날짜 미정', '']);
+  const pkShow = !VIEW || (t.packing || []).length; // 받은 사람: 준비물을 공유한 경우에만
+  if (pkShow) { const pk = t.packing || []; tabs.push(['pack', '🧳 준비물', pk.length ? `${pk.filter(p => p.d).length}/${pk.length}` : '']); }
   tabs.push(['log', VIEW ? (VIEW.opt.cost ? '📷 사진·경비' : '📷 사진') : '📝 기록', '']);
   if (!tabs.some(x => x[0] === S.tab)) S.tab = 'all';
   const total = its.reduce((s, x) => s + costNum(x.cost), 0);
   let body;
-  if (S.tab === 'log') body = logView(t);
+  if (S.tab === 'pack') body = packingView(t);
+  else if (S.tab === 'log') body = logView(t);
   else if (S.tab === 'none') body = dayBlock(t, '', -1, days.length);
   else if (S.tab !== 'all') body = dayBlock(t, S.tab, days.indexOf(S.tab), days.length);
   else body = days.map((d, i) => dayBlock(t, d, i, days.length)).join('') + (undated.length || !days.length ? dayBlock(t, '', -1, days.length) : '');
@@ -535,7 +538,7 @@ function tripView(t) {
     <nav class="daytabs" id="daytabs">${tabs.map(([k, l, sub]) =>
       `<button class="${S.tab === k ? 'on' : ''}" onclick="A.tab('${k}')">${l}${sub ? `<small>${sub}</small>` : ''}</button>`).join('')}</nav>
     ${body}
-    ${packingView(t)}
+    ${S.tab === 'pack' ? '' : packingView(t)}
   </div>
   ${VIEW ? '' : '<button class="fab" onclick="A.newItem()">＋ 일정</button>'}`;
 }
@@ -601,6 +604,16 @@ function itemCard(x, mode, d) {
 
 /* 준비물: 사람별로 나눠 기록 (p.w = 누구 것, 비어 있으면 공용). 체크는 내가, 공유 링크에서는 보기만 */
 const pkWho = p => String(p.w || '').trim();
+/* 쉼표로 여러 개 입력, 단 괄호 안의 쉼표는 나누지 않음: '세면도구(칫솔, 치약), 수건' → 2개 */
+function splitList(str) {
+  const out = []; let cur = '', depth = 0;
+  for (const ch of str) {
+    if ('([{（'.includes(ch)) depth++; else if (')]}）'.includes(ch)) depth = Math.max(0, depth - 1);
+    if (ch === ',' && !depth) { out.push(cur); cur = ''; } else cur += ch;
+  }
+  out.push(cur);
+  return out.map(x => x.trim()).filter(Boolean);
+}
 function pkPeople(t) {
   const list = [];
   (t.packing || []).forEach(p => { const w = pkWho(p); if (w && !list.includes(w)) list.push(w); });
@@ -1036,7 +1049,7 @@ const A = window.A = {
   pkDel(i) { const t = tripOf(S.tripId); t.packing.splice(i, 1); putTrip(t); A._pkRender(); },
   pkAdd(v) {
     const t = tripOf(S.tripId), inp = $('#pk_in');
-    const list = String(v != null ? v : inp.value).split(',').map(s => s.trim()).filter(Boolean);
+    const list = splitList(String(v != null ? v : inp.value));
     const who = S.pkWho || '';
     const have = new Set(t.packing.filter(p => pkWho(p) === who).map(p => p.t)); // 같은 물건도 사람마다 따로
     list.forEach(s => { if (!have.has(s)) { t.packing.push(who ? { t: s, d: false, w: who } : { t: s, d: false }); have.add(s); } });
@@ -1182,7 +1195,7 @@ const A = window.A = {
   _shareUrl: token => location.origin + location.pathname + '?share=' + token,
   _shareSheet(t, sh) {
     const url = sh ? A._shareUrl(sh.token) : '';
-    const opt = sh || { cost: false, memo: false };
+    const opt = sh ? Object.assign({ pack: true }, sh) : { cost: false, memo: false, pack: true };
     const chk = (k, label, sub) => `<label class="row" style="align-items:flex-start;gap:10px;margin:10px 0;cursor:pointer">
       <input type="checkbox" id="sh_${k}" ${opt[k] ? 'checked' : ''} style="width:20px;height:20px;flex:none;margin-top:1px">
       <span><b style="font-size:14.5px">${label}</b><br><small style="color:var(--sub)">${sub}</small></span></label>`;
@@ -1194,9 +1207,10 @@ const A = window.A = {
           <button class="btn pri" style="flex:none;padding:0 16px" onclick="A.shareCopy()">복사</button></div>
         ${isMobile && navigator.share ? `<button class="btn" style="width:100%;margin-top:8px" onclick="A.shareSend()">📤 카톡·문자로 보내기</button>` : ''}` : ''}
       <label class="f">함께 보여줄 항목</label>
+      ${chk('pack', '🧳 준비물', '사람별 목록과 체크 상태 (보기만 가능)')}
       ${chk('cost', '💰 경비', '일정별 비용과 경비 정리')}
       ${chk('memo', '📝 메모', '여행 메모와 일정 메모 (예약 번호 등이 있으면 주의)')}
-      <div class="hint">일정·숙소·지도 길찾기·링크·사진·준비물(사람별 체크 상태)은 항상 보여요. 별점, 후기는 항상 숨겨요.</div>
+      <div class="hint">일정·숙소·지도 길찾기·링크·사진은 항상 보여요. 별점, 후기는 항상 숨겨요.</div>
       <div class="btns" style="flex-direction:column">
         ${sh ? `<button class="btn pri" onclick="A.shareSave('${t.id}')">보여줄 항목 저장</button>
           <button class="btn" onclick="A.shareSave('${t.id}',true)">🔄 새 링크로 바꾸기 <small style="font-weight:600;color:var(--sub)">(지금 링크는 막혀요)</small></button>
@@ -1208,11 +1222,11 @@ const A = window.A = {
   async shareSave(id, renew) {
     const t = tripOf(id); if (!t) return;
     if (renew && !confirm('새 링크로 바꾸면 지금 링크로는 더 이상 볼 수 없어요. 바꿀까요?')) return;
-    const cost = $('#sh_cost').checked, memo = $('#sh_memo').checked;
+    const cost = $('#sh_cost').checked, memo = $('#sh_memo').checked, pack = $('#sh_pack').checked;
     toast('저장 중…', 10000);
     try {
       await flush();
-      const r = await api('shareSet', { tripId: id, cost, memo, renew: !!renew });
+      const r = await api('shareSet', { tripId: id, cost, memo, pack, renew: !!renew });
       A._shareSheet(t, r);
       toast(renew ? '새 링크로 바꿨어요' : '저장했어요 · 링크를 복사해서 보내주세요', 3500);
     } catch (e) { A._shareErr(e); }
