@@ -141,6 +141,7 @@ function normTrip(t) {
     id: String(t.id), title: t.title || '', tags: t.tags || '', start_date: t.start_date || '', end_date: t.end_date || '',
     emoji: t.emoji || '✈️', color: COLORS[t.color] ? t.color : 'ocean', memo: t.memo || '', review: t.review || '',
     rating: t.rating ? +t.rating : 0, packing: Array.isArray(pk) ? pk.filter(p => p && p.t) : [],
+    notebook: t.notebook || '',
     created_at: t.created_at || nowISO(), updated_at: t.updated_at || nowISO()
   };
 }
@@ -154,7 +155,7 @@ function normItem(x) {
 }
 const fromSheetTrip = r => normTrip({
   id: r.id, title: r.title, tags: r.tags, start_date: r.startDate, end_date: r.endDate, emoji: r.emoji, color: r.color,
-  memo: r.memo, review: r.review, rating: r.rating, packing: r.packing, created_at: r.createdAt, updated_at: r.updatedAt
+  memo: r.memo, review: r.review, rating: r.rating, packing: r.packing, notebook: r.notebook, created_at: r.createdAt, updated_at: r.updatedAt
 });
 const fromSheetItem = r => normItem({
   id: r.id, trip_id: r.tripId, date: r.date, end_date: r.endDate, time: r.time, end_time: r.endTime, category: r.category,
@@ -164,7 +165,7 @@ const fromSheetItem = r => normItem({
 const tripRow = t => ({
   id: t.id, title: t.title, tags: t.tags, startDate: t.start_date, endDate: t.end_date, emoji: t.emoji, color: t.color,
   memo: t.memo, review: t.review, rating: t.rating ? String(t.rating) : '', packing: JSON.stringify(t.packing),
-  createdAt: t.created_at, updatedAt: t.updated_at
+  notebook: t.notebook || '', createdAt: t.created_at, updatedAt: t.updated_at
 });
 const itemRow = x => ({
   id: x.id, tripId: x.trip_id, date: x.date, endDate: x.end_date, time: x.time, endTime: x.end_time, category: x.category,
@@ -241,10 +242,13 @@ async function pull(force) {
   if (!force && Date.now() - S.lastPull < 15000) return;
   S.pulling = true; renderSync();
   try {
+    A._typeNow(); // 입력 중인 여행 메모장·후기도 먼저 보냄
     await flush();
     if (OB.length) return; // 아직 못 보낸 변경이 있으면 내 화면을 우선
     const r = await api('pull');
+    const typing = A._nb && tripOf(A._nbId); // 받아오는 사이에 더 친 메모는 내 화면 내용 유지
     S.trips = (r.trips || []).filter(t => t.id).map(fromSheetTrip);
+    if (typing) { const nt = tripOf(typing.id); if (nt) nt.notebook = typing.notebook; }
     S.items = (r.items || []).filter(x => x.id).map(fromSheetItem);
     S.lastPull = Date.now(); saveCache();
     if (!SHEET) render(); else S.dirty = true; // 편집 창이 열려 있으면 닫힐 때 다시 그림
@@ -493,6 +497,12 @@ async function fillLegs() {
 
 /* ───────── 화면 ───────── */
 function render() {
+  const fa = document.activeElement, typing = fa && (fa.id === 'nb_ta' || fa.id === 'rv') ? [fa.id, fa.selectionStart, fa.selectionEnd] : null;
+  render_();
+  const nb = $('#nb_ta'); if (nb) A._grow(nb);
+  if (typing) { const el = $('#' + typing[0]); if (el) { el.focus({ preventScroll: true }); try { el.setSelectionRange(typing[1], typing[2]); } catch (e) { } } }
+}
+function render_() {
   const app = $('#app');
   if (!configured) { app.innerHTML = setupView(); return; }
   if (VIEW) {
@@ -560,7 +570,7 @@ function card(t) {
 
 function homeView() {
   const q = S.q.trim().toLowerCase();
-  let list = S.trips.filter(t => !q || [t.title, t.tags, t.memo, t.review].join(' ').toLowerCase().includes(q) ||
+  let list = S.trips.filter(t => !q || [t.title, t.tags, t.memo, t.notebook, t.review].join(' ').toLowerCase().includes(q) ||
     itemsOf(t.id).some(x => [x.title, x.place, x.memo].join(' ').toLowerCase().includes(q)));
   const startKey = t => validYmd(t.start_date) ? t.start_date : '9999';
   let body = '';
@@ -648,9 +658,18 @@ function tripView(t) {
     <nav class="daytabs" id="daytabs">${tabs.map(([k, l, sub]) =>
       `<button class="${S.tab === k ? 'on' : ''}" onclick="A.tab('${k}')">${l}${sub ? `<small>${sub}</small>` : ''}</button>`).join('')}</nav>
     ${body}
-    ${S.tab === 'pack' ? '' : packingView(t)}
+    ${S.tab === 'pack' ? '' : notebookView(t) + packingView(t)}
   </div>
   ${VIEW ? '' : '<button class="fab" onclick="A.newItem()">＋ 일정</button>'}`;
+}
+
+/* 여행 메모장: 일차와 상관없이 이 여행 전체에 대해 적는 메모 (웹앱과 같은 notebook 열) */
+function notebookView(t) {
+  if (VIEW) return t.notebook ? `<div class="box"><h4>📒 여행 메모장</h4><div class="sm" style="font-size:14px;white-space:pre-wrap">${esc(t.notebook)}</div></div>` : '';
+  return `<div class="box" id="notebook"><h4>📒 여행 메모장</h4>
+    <textarea class="in" id="nb_ta" rows="6" maxlength="45000" style="min-height:160px;line-height:1.65" oninput="A.notebook(this)"
+      placeholder="일차와 상관없이 이 여행 전체에 대해 적어두는 곳이에요. 전체 일정 요약, 동행자 연락처, 예약 정리, 느낀 점…">${esc(t.notebook)}</textarea>
+    <div class="hint">입력하면 자동으로 저장돼요</div></div>`;
 }
 
 function dayBlock(t, d, i, total) {
@@ -742,7 +761,7 @@ function packingView(t) {
   const row = ({ p, i }) => ro
     ? `<div class="pk ro ${p.d ? 'done' : ''}"><span class="cb">${p.d ? '✓' : ''}</span><span>${esc(p.t)}</span></div>`
     : `<div class="pk ${p.d ? 'done' : ''}"><button class="cb" onclick="A.pk(${i})">${p.d ? '✓' : ''}</button>
-      <span onclick="A.pk(${i})">${esc(p.t)}</span><button class="x" onclick="A.pkDel(${i})">✕</button></div>`;
+      <span onclick="A.pk(${i})">${esc(p.t)}</span><button class="x" onclick="A.pkEdit(${i})" aria-label="수정">✎</button><button class="x" onclick="A.pkDel(${i})" aria-label="삭제">✕</button></div>`;
   const body = groups.map(g => {
     const gd = g.list.filter(o => o.p.d).length;
     return `<div class="pk-g">${multi ? `<div class="pk-gh"><span>${g.w ? '👤 ' + esc(g.w) : '🧺 공용'}</span><small>${g.list.length ? `${gd} / ${g.list.length}` : '아직 없음'}</small></div>` : ''}
@@ -1013,6 +1032,7 @@ function printHtml(t) {
     const tot = Object.values(by).reduce((a, b) => a + b, 0);
     if (tot) extra.push(`<div class="pd"><h2>💰 경비</h2><div class="p-cost">${Object.keys(by).map(c => `<span>${iconOf(c)} ${esc(c)} <b>${won(by[c])}</b></span>`).join('')}<span class="tot">합계 <b>${won(tot)}</b></span></div></div>`);
   }
+  if (PR.memo && t.notebook) extra.push(`<div class="pd"><h2>📒 여행 메모장</h2><div class="note">${esc(t.notebook)}</div></div>`);
   if (PR.memo && (t.memo || t.review)) extra.push(`<div class="pd"><h2>📝 메모 · 후기</h2>${t.memo ? `<div class="note">${esc(t.memo)}</div>` : ''}${t.review ? `<div class="note">${t.rating ? '★'.repeat(t.rating) + ' ' : ''}${esc(t.review)}</div>` : ''}</div>`);
   if (PR.pack && (t.packing || []).length) {
     const ppl = ['', ...pkPeople(t)], multi = ppl.length > 1;
@@ -1159,9 +1179,18 @@ const A = window.A = {
   },
   rate(n) { const t = tripOf(S.tripId); t.rating = t.rating === n ? 0 : n; putTrip(t); render(); },
   review(v) {
-    const t = tripOf(S.tripId); t.review = v;
-    clearTimeout(A._rv); A._rv = setTimeout(() => putTrip(t), 700);
+    const t = tripOf(S.tripId); t.review = v; A._rvId = t.id;
+    clearTimeout(A._rv); A._rv = setTimeout(A._rvNow, 700);
   },
+  _rvNow() { clearTimeout(A._rv); A._rv = 0; const t = A._rvId && tripOf(A._rvId); if (t) putTrip(t); },
+  notebook(el) {
+    const t = tripOf(S.tripId); if (!t) return;
+    t.notebook = el.value; A._grow(el); A._nbId = t.id;
+    clearTimeout(A._nb); A._nb = setTimeout(A._nbNow, 700);
+  },
+  _nbNow() { clearTimeout(A._nb); A._nb = 0; const t = A._nbId && tripOf(A._nbId); if (t) putTrip(t); },
+  _typeNow() { if (A._nb) A._nbNow(); if (A._rv) A._rvNow(); },
+  _grow(el) { el.style.height = 'auto'; el.style.height = Math.max(160, el.scrollHeight + 2) + 'px'; },
 
   /* 준비물 */
   pk(i) { const t = tripOf(S.tripId); t.packing[i].d = !t.packing[i].d; putTrip(t); A._pkRender(); },
@@ -1200,6 +1229,25 @@ const A = window.A = {
     if (n && !t.packing.some(p => pkWho(p) === n) && !ex.includes(n)) ex.push(n); // 아직 물건이 없는 사람이면 칩 유지
     S.pkExtra[t.id] = ex;
     S.pkWho = n; putTrip(t); A._pkRender();
+  },
+  pkEdit(i) {
+    const t = tripOf(S.tripId), p = t && t.packing[i]; if (!p) return;
+    openSheet(`<h3>준비물 수정</h3>
+      <label class="f">준비물</label><input class="in" id="pe_t" value="${esc(p.t)}" maxlength="60" enterkeyhint="done">
+      <label class="f">누구 준비물 (비워두면 공용)</label><input class="in" id="pe_w" value="${esc(pkWho(p))}" placeholder="공용" maxlength="20">
+      <div class="chips" style="margin-top:8px"><button class="chip" onclick="$('#pe_w').value=''">🧺 공용</button>
+        ${pkPeople(t).map(w => `<button class="chip" data-w="${esc(w)}" onclick="$('#pe_w').value=this.dataset.w">👤 ${esc(w)}</button>`).join('')}</div>
+      <label class="row" style="align-items:center;gap:8px;margin-top:12px;font-weight:700"><input type="checkbox" id="pe_d" ${p.d ? 'checked' : ''} style="width:20px;height:20px;flex:none"> 챙김</label>
+      <div class="row" style="margin-top:18px"><button class="btn del" onclick="A.close();A.pkDel(${i})">삭제</button>
+        <button class="btn" onclick="A.close()">취소</button><button class="btn pri" onclick="A.pkEditSave(${i})">저장</button></div>`, 'pk');
+  },
+  pkEditSave(i) {
+    const t = tripOf(S.tripId); if (!t || !t.packing[i]) { closeSheet(); return; }
+    const n = $('#pe_t').value.trim(), w = $('#pe_w').value.trim().replace(/[,]/g, ' '), d = $('#pe_d').checked;
+    if (!n) { toast('준비물 이름을 입력해주세요'); return; }
+    if (t.packing.some((p, k) => k !== i && p.t === n && pkWho(p) === w)) { toast(`${w ? w + '의' : '공용'} 준비물에 같은 항목이 이미 있어요`); return; }
+    t.packing[i] = w ? { t: n, d, w } : { t: n, d };
+    closeSheet(); putTrip(t); A._pkRender();
   },
   _pkRender() { const box = $('#packing'), t = tripOf(S.tripId); if (box && t) box.outerHTML = packingView(t); },
 
@@ -1436,7 +1484,7 @@ window.addEventListener('online', () => { flush(); pull(true); });
 window.addEventListener('offline', renderSync);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') pull(false);
-  else if (OB.length) flush(); // 앱을 내리기 전에 남은 변경 보내기
+  else { A._typeNow(); if (OB.length) flush(); } // 앱을 내리기 전에 남은 변경(입력 중인 메모 포함) 보내기
 });
 window.addEventListener('focus', () => pull(false));
 
