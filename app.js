@@ -12,10 +12,10 @@ const isIOS = /iPhone|iPad|iPod/.test(UA) || (navigator.platform === 'MacIntel' 
 const isAndroid = /Android/i.test(UA);
 const isMobile = isIOS || isAndroid;
 
-const CATS = [['이동', '🚗'], ['숙소', '🏨'], ['식사', '🍽️'], ['갈곳', '📍'], ['체험', '🎡'], ['쇼핑', '🛍️'], ['기타', '📝']];
+const CATS = [['이동', '🚗'], ['숙소', '🏨'], ['식사', '🍽️'], ['카페', '☕'], ['갈곳', '📍'], ['체험', '🎡'], ['쇼핑', '🛍️'], ['기타', '📝']];
 const ICON = Object.fromEntries(CATS);
 const iconOf = c => ICON[c] || '📌'; // 예전에 쓰던 다른 분류도 그대로 표시
-const CCOL = { 이동: '#4C7BD9', 숙소: '#7C5CDB', 식사: '#E8742E', 갈곳: '#2F9E6E', 체험: '#D69E00', 쇼핑: '#D6336C', 기타: '#868E96' };
+const CCOL = { 이동: '#4C7BD9', 숙소: '#7C5CDB', 식사: '#E8742E', 카페: '#9C6B3E', 갈곳: '#2F9E6E', 체험: '#D69E00', 쇼핑: '#D6336C', 기타: '#868E96' };
 const won = n => '₩' + Math.round(+n || 0).toLocaleString('ko-KR');
 const COLORS = {
   ocean: ['바다', 'p', '#DCEBF5', '#C4DDF0'],
@@ -55,6 +55,7 @@ const covBg = k => { const c = COLORS[k] || COLORS.ocean; return `linear-gradien
 const covCls = k => `c-${COLORS[k] ? k : 'ocean'}${(COLORS[k] || COLORS.ocean)[1] === 'd' ? ' c-dark' : ''}`;
 (function () { const st = document.createElement('style'); st.textContent = Object.keys(COLORS).map(k => `.c-${k}{background:${covBg(k)}}`).join('\n'); document.head.appendChild(st); })();
 const EMOJIS = ['✈️', '🏖️', '⛰️', '🚗', '🏯', '🌸', '🍜', '📚', '♨️', '🎡', '🌊', '🏕️', '🍁', '❄️'];
+const EX_SUG = ['유류대', '통행료', '주차비', '간식', '기념품', '입장료', '렌트비', '충전비']; // 기타 경비 빠른 입력
 const PACK_SUG = ['신분증', '충전기', '보조배터리', '상비약', '세면도구', '선크림', '우산', '잠옷', '책', '여권', '유심 / eSIM', '카메라', '차 키'];
 const WD = '일월화수목금토';
 
@@ -137,11 +138,15 @@ function parseRoute(s) {
 function normTrip(t) {
   let pk = t.packing;
   if (typeof pk === 'string') { try { pk = JSON.parse(pk || '[]'); } catch (e) { pk = []; } }
+  let ex = t.expenses; // 기타 경비 [{ n: 항목, a: 금액, d: 날짜 }] — 웹앱과 같은 형식
+  if (typeof ex === 'string') { try { ex = JSON.parse(ex || '[]'); } catch (e) { ex = []; } }
   return {
     id: String(t.id), title: t.title || '', tags: t.tags || '', start_date: t.start_date || '', end_date: t.end_date || '',
     emoji: t.emoji || '✈️', color: COLORS[t.color] ? t.color : 'ocean', memo: t.memo || '', review: t.review || '',
     rating: t.rating ? +t.rating : 0, packing: Array.isArray(pk) ? pk.filter(p => p && p.t) : [],
     notebook: t.notebook || '',
+    expenses: Array.isArray(ex) ? ex.filter(e => e && e.n).map(e => ({ n: String(e.n), a: String(e.a || ''), d: validYmd(e.d) ? e.d : '' })) : [],
+    people: Math.min(99, Math.max(0, parseInt(t.people, 10) || 0)), // 여행 참가 인원 (0 = 미입력 → 1명으로 계산)
     created_at: t.created_at || nowISO(), updated_at: t.updated_at || nowISO()
   };
 }
@@ -155,7 +160,7 @@ function normItem(x) {
 }
 const fromSheetTrip = r => normTrip({
   id: r.id, title: r.title, tags: r.tags, start_date: r.startDate, end_date: r.endDate, emoji: r.emoji, color: r.color,
-  memo: r.memo, review: r.review, rating: r.rating, packing: r.packing, notebook: r.notebook, created_at: r.createdAt, updated_at: r.updatedAt
+  memo: r.memo, review: r.review, rating: r.rating, packing: r.packing, notebook: r.notebook, expenses: r.expenses, people: r.people, created_at: r.createdAt, updated_at: r.updatedAt
 });
 const fromSheetItem = r => normItem({
   id: r.id, trip_id: r.tripId, date: r.date, end_date: r.endDate, time: r.time, end_time: r.endTime, category: r.category,
@@ -165,7 +170,8 @@ const fromSheetItem = r => normItem({
 const tripRow = t => ({
   id: t.id, title: t.title, tags: t.tags, startDate: t.start_date, endDate: t.end_date, emoji: t.emoji, color: t.color,
   memo: t.memo, review: t.review, rating: t.rating ? String(t.rating) : '', packing: JSON.stringify(t.packing),
-  notebook: t.notebook || '', createdAt: t.created_at, updatedAt: t.updated_at
+  notebook: t.notebook || '', expenses: JSON.stringify(t.expenses || []), people: t.people ? String(t.people) : '',
+  createdAt: t.created_at, updatedAt: t.updated_at
 });
 const itemRow = x => ({
   id: x.id, tripId: x.trip_id, date: x.date, endDate: x.end_date, time: x.time, endTime: x.end_time, category: x.category,
@@ -385,6 +391,12 @@ function stayText(x) {
   return t;
 }
 const costNum = v => { const s = String(v || ''); return /^[\s₩원,\d.-]+$/.test(s) ? +(s.replace(/[^\d.-]/g, '')) || 0 : 0; };
+/* 기타 경비 (유류대·통행료처럼 일정에 안 붙는 비용) · 인원 · 1인당 */
+const expOf = t => (t && t.expenses) || [];
+const expSum = list => list.reduce((s, e) => s + costNum(e.a), 0);
+const tripTotal = t => itemsOf(t.id).reduce((s, x) => s + costNum(x.cost), 0) + expSum(expOf(t));
+const headN = t => Math.max(1, +(t && t.people) || 1);
+const perHead = (t, n) => Math.round((+n || 0) / headN(t));
 
 /* ───────── 지도 링크 ───────── */
 const appname = () => location.origin || 'travel-log';
@@ -629,7 +641,7 @@ function tripView(t) {
   if (pkShow) { const pk = t.packing || []; tabs.push(['pack', '🧳 준비물', pk.length ? `${pk.filter(p => p.d).length}/${pk.length}` : '']); }
   tabs.push(['log', VIEW ? (VIEW.opt.cost ? '📷 사진·경비' : '📷 사진') : '📝 기록', '']);
   if (!tabs.some(x => x[0] === S.tab)) S.tab = 'all';
-  const total = its.reduce((s, x) => s + costNum(x.cost), 0);
+  const total = tripTotal(t);
   let body;
   if (S.tab === 'pack') body = packingView(t);
   else if (S.tab === 'log') body = logView(t);
@@ -652,7 +664,7 @@ function tripView(t) {
       ${t.memo ? `<div class="memo">${esc(t.memo)}</div>` : ''}
       <div class="hstats"><div><b>${its.length}</b><span>전체 일정</span></div>
         <div><b>${its.filter(x => x.category === '갈곳' || x.category === '체험').length}</b><span>갈 곳 · 체험</span></div>
-        ${hideCost ? `<div><b>${days.length}일</b><span>여행 일수</span></div>` : `<div><b>${total ? won(total) : '-'}</b><span>경비</span></div>`}</div>
+        ${hideCost ? `<div><b>${days.length}일</b><span>여행 일수</span></div>` : `<div onclick="A.tab('log')" style="cursor:pointer"><b>${total ? won(total) : '-'}</b><span>${total && headN(t) > 1 ? `${headN(t)}명 · 1인 ${won(perHead(t, total))}` : '경비'}</span></div>`}</div>
       <div class="acts">${acts}</div>
     </div>
     <nav class="daytabs" id="daytabs">${tabs.map(([k, l, sub]) =>
@@ -680,18 +692,21 @@ function dayBlock(t, d, i, total) {
   const tonight = d ? its.find(x => sleepsOn(x, d)) : null;
   const cnt = k => main.filter(x => x.category === k).length;
   const stay = !d ? '' : tonight ? esc(tonight.title || tonight.place) : i === total - 1 && total > 1 ? '돌아오는 날' : '숙소 미정';
-  const cost = main.reduce((s, x) => s + costNum(x.cost), 0);
+  const dex = d ? expOf(t).filter(e => e.d === d) : [], exAmt = expSum(dex);
+  const hideCost = VIEW && !VIEW.opt.cost;
+  const cost = hideCost ? 0 : main.reduce((s, x) => s + costNum(x.cost), 0) + exAmt;
   return `<section class="day">
     <div class="day-h"><span class="dnum">${i >= 0 ? 'DAY ' + (i + 1) : '날짜 미정'}</span><b>${d ? md(d) : '날짜 미정 · 기간 밖 일정'}</b>
       ${cost ? `<span class="dcost">${won(cost)}</span>` : ''}</div>
-    ${d ? `<div class="day-sum"><span>🏨 ${stay}</span><span>🍽️ 식사 ${cnt('식사')}</span><span>📍 갈곳 ${cnt('갈곳') + cnt('체험')}</span></div>` : ''}
+    ${d ? `<div class="day-sum"><span>🏨 ${stay}</span><span>🍽️ 식사 ${cnt('식사')}</span>${cnt('카페') ? `<span>☕ 카페 ${cnt('카페')}</span>` : ''}<span>📍 갈곳 ${cnt('갈곳') + cnt('체험')}</span>${exAmt && !hideCost ? `<span onclick="A.tab('log')" style="cursor:pointer">💳 기타 ${won(exAmt)}</span>` : ''}</div>` : ''}
     <div class="tl">
       ${outs.map(x => itemCard(x, 'out')).join('')}
       ${rowsWithLegs(main, outs[0] && outs[0].geo && outs[0].geo.to)}
       ${mids.map(x => itemCard(x, 'mid', d)).join('')}
       ${!outs.length && !main.length && !mids.length ? `<div class="tl-empty">${VIEW ? '이 날은 일정이 없어요.' : '아직 일정이 없어요. 아래에서 바로 추가해보세요.'}</div>` : ''}
     </div>
-    ${VIEW ? '' : `<div class="quick">${CATS.map(([c, ic]) => `<button style="--c:${CCOL[c]}" onclick="A.newItem('${d}','${c}')">＋ ${ic} ${c}</button>`).join('')}</div>`}
+    ${VIEW ? '' : `<div class="quick">${CATS.map(([c, ic]) => `<button style="--c:${CCOL[c]}" onclick="A.newItem('${d}','${c}')">＋ ${ic} ${c}</button>`).join('')}
+      <button style="--c:#495057" onclick="A.exEdit(-1,'${d}')">＋ 💳 기타 경비</button></div>`}
   </section>`;
 }
 
@@ -791,47 +806,94 @@ function logView(t) {
   const its = orderedItems(t), days = tripDays(t);
   const photos = its.flatMap(x => (x.photos || []).map((p, k) => ({ p, id: x.id, k })));
   const spent = its.filter(x => costNum(x.cost));
+  const ex = expOf(t).map((e, i) => ({ e, i, a: costNum(e.a) }))
+    .sort((p, q) => (p.e.d || '9999').localeCompare(q.e.d || '9999') || p.i - q.i);
+  const exTot = ex.reduce((s, o) => s + o.a, 0);
   const by = {};
   spent.forEach(x => { by[x.category] = (by[x.category] || 0) + costNum(x.cost); });
-  const total = Object.values(by).reduce((a, b) => a + b, 0), max = Math.max(1, ...Object.values(by));
+  const total = Object.values(by).reduce((a, b) => a + b, 0) + exTot, max = Math.max(1, exTot, ...Object.values(by));
   const cats = Object.keys(by).sort((a, b) => by[b] - by[a]);
+  const n = headN(t), ro = !!VIEW;
   const when = x => { const i = days.indexOf(x.date); return x.date ? `${i >= 0 ? i + 1 + '일차 ' : ''}${md(x.date)}${x.time ? ' ' + x.time : ''}` : '날짜 미정'; };
+  const exWhen = d => { const i = days.indexOf(d); return d ? `${i >= 0 ? i + 1 + '일차 ' : ''}${md(d)}` : '날짜 없음'; };
+  const exRow = o => `<div class="crow" ${ro ? 'style="cursor:default"' : `onclick="A.exEdit(${o.i})"`}><span class="cdot" style="background:#495057"></span>
+      <div><b>${esc(o.e.n)}</b><small>${esc(exWhen(o.e.d))} · 기타 경비</small></div><span class="camt">${won(o.a)}</span></div>`;
+  const pp = v => n > 1 ? `<small class="pph">1인 ${won(perHead(t, v))}</small>` : '';
+  /* 인원 · 1인당 (휴대폰에서 바로 −/＋) */
+  const headBox = `<div class="ppl">
+      <span class="ppl-l">👥 인원</span>
+      ${ro ? `<b class="ppl-n">${n}명</b>` : `<button class="ppl-b" onclick="A.people(-1)" aria-label="한 명 빼기" ${n <= 1 ? 'disabled' : ''}>−</button>
+      <button class="ppl-n" onclick="A.peopleAsk()">${n}명</button>
+      <button class="ppl-b" onclick="A.people(1)" aria-label="한 명 더하기">＋</button>`}
+      <span class="ppl-v">1인당 <b>${won(perHead(t, total))}</b></span></div>`;
   const costBox = total ? `
       <div class="seg mini">${[['cat', '분류별'], ['item', '항목별'], ['day', '일차별']].map(([k, l]) =>
         `<button class="${S.costView === k ? 'on' : ''}" onclick="A.costView('${k}')">${l}</button>`).join('')}</div>
       ${S.costView === 'item' ? `<div class="clist">${spent.map(x => `<div class="crow" onclick="A.editItem('${x.id}')">
           <span class="cdot" style="background:${CCOL[x.category] || CCOL['기타']}"></span>
           <div><b>${esc(x.category === '이동' ? (x.title + (x.place ? ' → ' + x.place : '')) : (x.title || x.place))}</b><small>${esc(when(x))} · ${esc(x.category)}</small></div>
-          <span class="camt">${won(costNum(x.cost))}</span></div>`).join('')}</div>`
-      : S.costView === 'day' ? `<div class="clist">${days.concat(spent.some(x => !days.includes(x.date)) ? [''] : []).map((d, i) => {
+          <span class="camt">${won(costNum(x.cost))}</span></div>`).join('')}${ex.filter(o => o.a).map(exRow).join('')}</div>`
+      : S.costView === 'day' ? `<div class="clist">${days.concat(spent.some(x => !days.includes(x.date)) || ex.some(o => o.a && !days.includes(o.e.d)) ? [''] : []).map((d, i) => {
           const list = spent.filter(x => d ? x.date === d : !days.includes(x.date));
-          if (!list.length) return '';
-          return `<div class="cday"><div class="cday-h"><span>${d ? `${i + 1}일차 · ${md(d)}` : '날짜 미정'}</span><b>${won(list.reduce((s, x) => s + costNum(x.cost), 0))}</b></div>
+          const el = ex.filter(o => o.a && (d ? o.e.d === d : !days.includes(o.e.d)));
+          if (!list.length && !el.length) return '';
+          const sub = list.reduce((s, x) => s + costNum(x.cost), 0) + el.reduce((s, o) => s + o.a, 0);
+          return `<div class="cday"><div class="cday-h"><span>${d ? `${i + 1}일차 · ${md(d)}` : '날짜 미정'}</span><b>${won(sub)}${pp(sub)}</b></div>
             ${list.map(x => `<div class="crow" onclick="A.editItem('${x.id}')"><span class="cdot" style="background:${CCOL[x.category] || CCOL['기타']}"></span>
-              <div><b>${esc(x.title || x.place)}</b><small>${esc(x.category)}${x.time ? ' · ' + esc(x.time) : ''}</small></div><span class="camt">${won(costNum(x.cost))}</span></div>`).join('')}</div>`;
+              <div><b>${esc(x.title || x.place)}</b><small>${esc(x.category)}${x.time ? ' · ' + esc(x.time) : ''}</small></div><span class="camt">${won(costNum(x.cost))}</span></div>`).join('')}
+            ${el.map(exRow).join('')}</div>`;
         }).join('')}</div>`
       : cats.map(c => `<details class="cbar" style="--c:${CCOL[c] || CCOL['기타']}"><summary>
           <span class="cl">${iconOf(c)} ${esc(c)}</span><span class="bar2"><i style="width:${by[c] / max * 100}%"></i></span><span class="camt">${won(by[c])}</span></summary>
           ${spent.filter(x => x.category === c).map(x => `<div class="crow" onclick="A.editItem('${x.id}')"><div><b>${esc(x.title || x.place)}</b><small>${esc(when(x))}</small></div><span class="camt">${won(costNum(x.cost))}</span></div>`).join('')}
-        </details>`).join('')}
+        </details>`).join('')
+        + (exTot ? `<details class="cbar" style="--c:#495057"><summary>
+          <span class="cl">💳 기타 경비</span><span class="bar2"><i style="width:${exTot / max * 100}%"></i></span><span class="camt">${won(exTot)}</span></summary>
+          ${ex.filter(o => o.a).map(exRow).join('')}</details>` : '')}
       <div class="ctotal"><span>합계</span><b>${won(total)}</b></div>`
-    : '<div class="sm">비용이 입력된 일정이 없어요. 일정을 눌러 비용을 넣으면 자동으로 정리돼요.</div>';
-  if (VIEW) return `${VIEW.opt.cost ? `<div class="box"><h4>💰 경비 정리 ${total ? `<small>${spent.length}건</small>` : ''}</h4>${costBox}</div>` : ''}
+    : '<div class="sm">비용이 입력된 일정이 없어요. 일정을 눌러 비용을 넣거나, 아래 기타 경비에 추가하면 자동으로 정리돼요.</div>';
+  const exBox = `<div class="box" id="expenses"><h4>💳 기타 경비 <small>${ex.length ? `${ex.length}건 · ${won(exTot)}` : '유류대 · 통행료 · 주차비 등'}</small></h4>
+      ${ex.length ? `<div class="clist">${ex.map(exRow).join('')}</div>` : `<div class="sm">${ro ? '기타 경비가 없어요' : '일정에 안 붙는 비용(유류대, 통행료, 주차비…)을 여기에 적어두세요.'}</div>`}
+      ${ro ? '' : `<button class="btn" style="width:100%;margin-top:10px" onclick="A.exEdit(-1)">＋ 기타 경비 추가</button>`}</div>`;
+  const cnt = spent.length + ex.filter(o => o.a).length;
+  const money = `<div class="box" id="money"><h4>💰 경비 정리 ${total ? `<small>${cnt}건</small>` : ''}</h4>${headBox}${costBox}</div>${exBox}`;
+  if (VIEW) return `${VIEW.opt.cost ? money : ''}
     ${t.memo ? `<div class="box"><h4>📝 여행 메모</h4><div class="sm" style="font-size:14px">${esc(t.memo)}</div></div>` : ''}
     <div class="box"><h4>📷 사진 <small>${photos.length}장</small></h4>
       ${photos.length ? `<div class="gallery">${photos.map(o => `<button onclick="A.lightbox('${o.id}',${o.k})">${imgTag(o.p)}</button>`).join('')}</div>`
       : '<div class="sm">아직 올라온 사진이 없어요</div>'}</div>`;
-  return `<div class="box"><h4>⭐ 여행 별점</h4>
+  return `${money}
+    <div class="box"><h4>⭐ 여행 별점</h4>
       <div class="stars">${[1, 2, 3, 4, 5].map(n => `<button class="${t.rating >= n ? 'on' : ''}" onclick="A.rate(${n})">★</button>`).join('')}</div>
       <label class="f">여행 후기</label>
       <textarea class="in" id="rv" rows="6" placeholder="좋았던 곳, 다음엔 바꾸고 싶은 것, 기억하고 싶은 순간…" oninput="A.review(this.value)">${esc(t.review)}</textarea>
       <div class="hint">입력하면 자동으로 저장돼요</div></div>
-    <div class="box"><h4>💰 경비 정리 ${total ? `<small>${spent.length}건</small>` : ''}</h4>${costBox}</div>
     ${t.memo ? `<div class="box"><h4>📝 여행 메모</h4><div class="sm" style="font-size:14px">${esc(t.memo)}</div></div>` : ''}
     <div class="box"><h4>📷 사진 <small>${photos.length}장</small></h4>
       ${photos.length ? `<div class="gallery">${photos.map(o => `<button onclick="A.lightbox('${o.id}',${o.k})">${imgTag(o.p)}</button>`).join('')}</div>`
       : '<div class="sm">일정에 사진을 붙이면 여기에 모여요</div>'}</div>
     <div style="text-align:center;margin:6px 0 18px"><button class="btn" style="flex:none;padding:12px 18px" onclick="A.dupTrip('${t.id}')">📋 이 여행 복제하기</button></div>`;
+}
+
+/* 기타 경비 입력 창 (휴대폰에서도 아래에서 올라오는 창으로) */
+function expenseSheet(t, i, d) {
+  const e = i >= 0 ? expOf(t)[i] : { n: '', a: '', d: d !== undefined ? d : '' };
+  if (!e) return;
+  const days = tripDays(t);
+  if (i < 0 && d === undefined) e.d = days.includes(today()) ? today() : '';
+  const opts = days.slice(); if (e.d && !opts.includes(e.d)) opts.push(e.d);
+  openSheet(`<h3>${i >= 0 ? '기타 경비 수정' : '기타 경비 추가'}</h3>
+    <label class="f">항목</label><input class="in" id="ex_n" value="${esc(e.n)}" placeholder="예) 유류대" maxlength="40" enterkeyhint="next">
+    <div class="sug">${EX_SUG.map(s => `<button type="button" onclick="A.exPick('${s}')">${s}</button>`).join('')}</div>
+    <div class="row"><div><label class="f">금액</label><input class="in" id="ex_a" value="${costNum(e.a) ? costNum(e.a).toLocaleString('ko-KR') : ''}" inputmode="numeric" placeholder="50,000" oninput="A.fmtNum(this)" enterkeyhint="done"></div>
+      <div><label class="f">날짜</label><select class="in" id="ex_d">${opts.map(v => `<option value="${v}" ${e.d === v ? 'selected' : ''}>${days.indexOf(v) >= 0 ? days.indexOf(v) + 1 + '일차 · ' : ''}${md(v)}</option>`).join('')}
+        <option value="" ${!e.d ? 'selected' : ''}>날짜 없음</option></select></div></div>
+    <div class="hint">경비 정리와 1인당 금액에 함께 들어가요</div>
+    <div class="btns">${i >= 0 ? `<button class="btn del" onclick="A.exDel(${i})">삭제</button>` : ''}
+      <button class="btn" onclick="A.close()">취소</button>
+      ${i < 0 ? `<button class="btn" onclick="A.exSave(-1,true)">＋ 하나 더</button>` : ''}
+      <button class="btn pri" onclick="A.exSave(${i})">저장</button></div>`, 'expense');
+  if (!isMobile) setTimeout(() => $(e.n ? '#ex_a' : '#ex_n') && $(e.n ? '#ex_a' : '#ex_n').focus(), 250);
 }
 
 /* ───────── 시트(편집 창) ───────── */
@@ -875,6 +937,8 @@ function tripSheet(t) {
     ${allTags().length ? `<div class="sug">${allTags().map(g => `<button type="button" onclick="A.addTag('${esc(g).replace(/'/g, '&#39;')}')">#${esc(g)}</button>`).join('')}</div>` : ''}
     <div class="row"><div>${dateField('t_s', '출발일', t.start_date, 't_e')}</div><div>${dateField('t_e', '돌아오는 날', t.end_date)}</div></div>
     <div class="hint" id="t_h">${esc(lenLabel(t))}</div>
+    <label class="f">참가 인원 <span style="font-weight:500">(경비를 나눠 1인당 금액을 보여줘요)</span></label>
+    <div class="row stay-in"><input class="in" id="t_ppl" type="number" inputmode="numeric" min="1" max="99" placeholder="1" value="${t.people || ''}"><span>명</span></div>
     <label class="f">메모</label><textarea class="in" id="t_memo" placeholder="예약 번호, 주의할 점…">${esc(t.memo)}</textarea>
     <div class="btns"><button class="btn" onclick="A.close()">취소</button><button class="btn pri" onclick="A.saveTrip('${t.id}')">저장</button></div>`, 'trip');
   if (isNew && !isMobile) setTimeout(() => $('#t_title').focus(), 250);
@@ -1029,8 +1093,11 @@ function printHtml(t) {
   const extra = [];
   if (PR.cost) {
     const by = {}; all.forEach(x => { const n = costNum(x.cost); if (n) by[x.category] = (by[x.category] || 0) + n; });
-    const tot = Object.values(by).reduce((a, b) => a + b, 0);
-    if (tot) extra.push(`<div class="pd"><h2>💰 경비</h2><div class="p-cost">${Object.keys(by).map(c => `<span>${iconOf(c)} ${esc(c)} <b>${won(by[c])}</b></span>`).join('')}<span class="tot">합계 <b>${won(tot)}</b></span></div></div>`);
+    const exs = expOf(t).filter(e => costNum(e.a)), exTot = expSum(exs);
+    if (exTot) by['💳 기타 경비'] = exTot;
+    const tot = Object.values(by).reduce((a, b) => a + b, 0), n = headN(t);
+    if (tot) extra.push(`<div class="pd"><h2>💰 경비</h2><div class="p-cost">${Object.keys(by).map(c => `<span>${ICON[c] ? iconOf(c) + ' ' : ''}${esc(c)} <b>${won(by[c])}</b></span>`).join('')}<span class="tot">합계 <b>${won(tot)}</b>${n > 1 ? ` · ${n}명 · 1인 <b>${won(perHead(t, tot))}</b>` : ''}</span></div>
+      ${exs.length ? `<div class="p-m" style="padding:4px">💳 기타 경비: ${exs.map(e => `${e.d ? md(e.d) + ' ' : ''}${esc(e.n)} ${won(costNum(e.a))}`).join('  ·  ')}</div>` : ''}</div>`);
   }
   if (PR.memo && t.notebook) extra.push(`<div class="pd"><h2>📒 여행 메모장</h2><div class="note">${esc(t.notebook)}</div></div>`);
   if (PR.memo && (t.memo || t.review)) extra.push(`<div class="pd"><h2>📝 메모 · 후기</h2>${t.memo ? `<div class="note">${esc(t.memo)}</div>` : ''}${t.review ? `<div class="note">${t.rating ? '★'.repeat(t.rating) + ' ' : ''}${esc(t.review)}</div>` : ''}</div>`);
@@ -1156,7 +1223,8 @@ const A = window.A = {
       title, tags: $('#t_tags').value.split(',').map(x => x.trim()).filter(Boolean).join(', '),
       start_date: s, end_date: e || s,
       emoji: ($('.emojis .on') || {}).dataset?.v || '✈️', color: ($('.colors .on') || {}).dataset?.v || 'ocean',
-      memo: $('#t_memo').value.trim()
+      memo: $('#t_memo').value.trim(),
+      people: Math.min(99, Math.max(0, parseInt($('#t_ppl').value, 10) || 0))
     });
     putTrip(t); closeSheet(true);
     if (!old) { S.tab = 'all'; A.open(t.id); } else render();
@@ -1191,6 +1259,39 @@ const A = window.A = {
   _nbNow() { clearTimeout(A._nb); A._nb = 0; const t = A._nbId && tripOf(A._nbId); if (t) putTrip(t); },
   _typeNow() { if (A._nb) A._nbNow(); if (A._rv) A._rvNow(); },
   _grow(el) { el.style.height = 'auto'; el.style.height = Math.max(160, el.scrollHeight + 2) + 'px'; },
+
+  /* 인원 · 기타 경비 */
+  people(d) { const t = tripOf(S.tripId); if (!t) return; t.people = Math.min(99, Math.max(1, headN(t) + d)); putTrip(t); render(); },
+  peopleAsk() {
+    const t = tripOf(S.tripId); if (!t) return;
+    const v = prompt('여행 참가 인원 (명)', headN(t)); if (v === null) return;
+    const n = parseInt(String(v).replace(/\D/g, ''), 10);
+    if (!(n >= 1 && n <= 99)) { toast('1~99 사이 숫자로 적어주세요'); return; }
+    t.people = n; putTrip(t); render();
+  },
+  exEdit(i, d) { if (VIEW) return; const t = tripOf(S.tripId); if (t) expenseSheet(t, i, d); },
+  exPick(v) { $('#ex_n').value = v; const a = $('#ex_a'); if (a && !a.value) a.focus(); },
+  exSave(i, more) {
+    const t = tripOf(S.tripId); if (!t) return;
+    const n = $('#ex_n').value.trim(), a = $('#ex_a').value.replace(/[^\d]/g, ''), d = $('#ex_d').value;
+    if (!n) { toast('항목을 적어주세요 (예: 유류대)'); $('#ex_n').focus(); return; }
+    if (!+a) { toast('금액을 적어주세요'); $('#ex_a').focus(); return; }
+    t.expenses = expOf(t).slice();
+    if (i >= 0 && t.expenses[i]) t.expenses[i] = { n, a, d }; else t.expenses.push({ n, a, d });
+    putTrip(t);
+    if (more) { // 같은 날짜로 하나 더
+      expenseSheet(t, -1, d); toast(`${n} ${won(a)} 추가했어요`);
+      if (isMobile) setTimeout(() => $('#ex_n') && $('#ex_n').focus(), 50);
+      S.dirty = true; return;
+    }
+    closeSheet(true); render(); toast(i >= 0 ? '수정했어요' : `${n} ${won(a)} 추가했어요`);
+  },
+  exDel(i) {
+    const t = tripOf(S.tripId); if (!t || !expOf(t)[i]) return;
+    if (!confirm(`'${expOf(t)[i].n}' 경비를 삭제할까요?`)) return;
+    t.expenses = expOf(t).filter((_, k) => k !== i); putTrip(t);
+    closeSheet(true); render(); toast('삭제했어요');
+  },
 
   /* 준비물 */
   pk(i) { const t = tripOf(S.tripId); t.packing[i].d = !t.packing[i].d; putTrip(t); A._pkRender(); },
